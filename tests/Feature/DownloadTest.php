@@ -9,15 +9,13 @@ use App\Models\Song;
 use App\Models\User;
 use App\Repositories\InteractionRepository;
 use App\Services\DownloadService;
-use Illuminate\Http\Response;
 use Illuminate\Support\Collection;
 use Mockery;
 use Mockery\MockInterface;
 
 class DownloadTest extends TestCase
 {
-    /** @var MockInterface|DownloadService */
-    private $downloadService;
+    private MockInterface|DownloadService $downloadService;
 
     public function setUp(): void
     {
@@ -29,19 +27,21 @@ class DownloadTest extends TestCase
 
     public function testNonLoggedInUserCannotDownload(): void
     {
-        $song = Song::first();
+        /** @var Song $song */
+        $song = Song::query()->first();
 
         $this->downloadService
             ->shouldReceive('from')
             ->never();
 
         $this->get("download/songs?songs[]=$song->id")
-            ->assertRedirect('/');
+            ->assertUnauthorized();
     }
 
     public function testDownloadOneSong(): void
     {
-        $song = Song::first();
+        /** @var Song $song */
+        $song = Song::query()->first();
 
         /** @var User $user */
         $user = User::factory()->create();
@@ -64,16 +64,17 @@ class DownloadTest extends TestCase
         $user = User::factory()->create();
 
         /** @var array<Song>|Collection $songs */
-        $songs = Song::take(2)->orderBy('id')->get();
+        $songs = Song::query()->take(2)->orderBy('id')->get();
 
         $this->downloadService
             ->shouldReceive('from')
             ->once()
             ->with(Mockery::on(static function (Collection $retrievedSongs) use ($songs): bool {
-                $retrievedIds = $retrievedSongs->pluck('id')->toArray();
-                $requestedIds = $songs->pluck('id')->toArray();
+                $retrievedIds = $retrievedSongs->pluck('id')->all();
+                $requestedIds = $songs->pluck('id')->all();
+                self::assertEqualsCanonicalizing($requestedIds, $retrievedIds);
 
-                return $requestedIds[0] === $retrievedIds[0] && $requestedIds[1] === $retrievedIds[1];
+                return true;
             }))
             ->andReturn($this->mediaPath . '/blank.mp3'); // should be a zip file, but we're testing here…
 
@@ -86,7 +87,8 @@ class DownloadTest extends TestCase
 
     public function testDownloadAlbum(): void
     {
-        $album = Album::first();
+        /** @var Album $album */
+        $album = Album::query()->first();
 
         /** @var User $user */
         $user = User::factory()->create();
@@ -105,7 +107,8 @@ class DownloadTest extends TestCase
 
     public function testDownloadArtist(): void
     {
-        $artist = Artist::first();
+        /** @var Artist $artist */
+        $artist = Artist::query()->first();
 
         /** @var User $user */
         $user = User::factory()->create();
@@ -128,9 +131,7 @@ class DownloadTest extends TestCase
         $user = User::factory()->create();
 
         /** @var Playlist $playlist */
-        $playlist = Playlist::factory()->create([
-            'user_id' => $user->id,
-        ]);
+        $playlist = Playlist::factory()->for($user)->create();
 
         $this->downloadService
             ->shouldReceive('from')
@@ -153,7 +154,7 @@ class DownloadTest extends TestCase
         $user = User::factory()->create();
 
         $this->get("download/playlist/{$playlist->id}?api_token=" . $user->createToken('Koel')->plainTextToken)
-            ->assertStatus(Response::HTTP_FORBIDDEN);
+            ->assertForbidden();
     }
 
     public function testDownloadFavorites(): void
@@ -165,9 +166,7 @@ class DownloadTest extends TestCase
         self::mock(InteractionRepository::class)
             ->shouldReceive('getUserFavorites')
             ->once()
-            ->with(Mockery::on(static function (User $retrievedUser) use ($user): bool {
-                return $retrievedUser->id === $user->id;
-            }))
+            ->with(Mockery::on(static fn (User $retrievedUser) => $retrievedUser->is($user)))
             ->andReturn($favorites);
 
         $this->downloadService

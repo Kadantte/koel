@@ -2,95 +2,89 @@
 
 namespace App\Http\Controllers\API;
 
+use App\Exceptions\PlaylistBothSongsAndRulesProvidedException;
+use App\Http\Controllers\Controller;
 use App\Http\Requests\API\PlaylistStoreRequest;
-use App\Http\Requests\API\PlaylistSyncRequest;
+use App\Http\Requests\API\PlaylistUpdateRequest;
+use App\Http\Resources\PlaylistResource;
 use App\Models\Playlist;
+use App\Models\PlaylistFolder;
 use App\Models\User;
-use App\Repositories\PlaylistRepository;
-use App\Services\SmartPlaylistService;
+use App\Repositories\PlaylistFolderRepository;
+use App\Services\PlaylistService;
+use App\Values\SmartPlaylistRuleGroupCollection;
 use Illuminate\Contracts\Auth\Authenticatable;
-use Illuminate\Http\Request;
+use Illuminate\Support\Arr;
+use Illuminate\Validation\ValidationException;
 
 class PlaylistController extends Controller
 {
-    private PlaylistRepository $playlistRepository;
-    private SmartPlaylistService $smartPlaylistService;
-
-    /** @var User */
-    private ?Authenticatable $currentUser;
-
+    /** @param User $user */
     public function __construct(
-        PlaylistRepository $playlistRepository,
-        SmartPlaylistService $smartPlaylistService,
-        ?Authenticatable $currentUser
+        private PlaylistService $playlistService,
+        private PlaylistFolderRepository $folderRepository,
+        private ?Authenticatable $user
     ) {
-        $this->playlistRepository = $playlistRepository;
-        $this->smartPlaylistService = $smartPlaylistService;
-        $this->currentUser = $currentUser;
     }
 
     public function index()
     {
-        return response()->json($this->playlistRepository->getAllByCurrentUser());
+        return PlaylistResource::collection($this->user->playlists);
     }
 
     public function store(PlaylistStoreRequest $request)
     {
-        /** @var Playlist $playlist */
-        $playlist = $this->currentUser->playlists()->create([
-            'name' => $request->name,
-            'rules' => $request->rules,
-        ]);
+        $folder = null;
 
-        $songs = (array) $request->songs;
-
-        if ($songs) {
-            $playlist->songs()->sync($songs);
+        if ($request->folder_id) {
+            /** @var PlaylistFolder $folder */
+            $folder = $this->folderRepository->getOne($request->folder_id);
+            $this->authorize('own', $folder);
         }
 
-        $playlistAsArray = $playlist->toArray();
-        $playlistAsArray['songs'] = $playlist->songs->pluck('id');
+        try {
+            $playlist = $this->playlistService->createPlaylist(
+                $request->name,
+                $this->user,
+                $folder,
+                Arr::wrap($request->songs),
+                $request->rules ? SmartPlaylistRuleGroupCollection::create(Arr::wrap($request->rules)) : null
+            );
 
-        return response()->json($playlistAsArray);
+            return PlaylistResource::make($playlist);
+        } catch (PlaylistBothSongsAndRulesProvidedException $e) {
+            throw ValidationException::withMessages(['songs' => [$e->getMessage()]]);
+        }
     }
 
-    public function update(Request $request, Playlist $playlist)
+    public function update(PlaylistUpdateRequest $request, Playlist $playlist)
     {
-        $this->authorize('owner', $playlist);
+        $this->authorize('own', $playlist);
 
-        $playlist->update($request->only('name', 'rules'));
+        $folder = null;
 
-        return response()->json($playlist);
-    }
+        if ($request->folder_id) {
+            /** @var PlaylistFolder $folder */
+            $folder = $this->folderRepository->getOne($request->folder_id);
+            $this->authorize('own', $folder);
+        }
 
-    public function sync(PlaylistSyncRequest $request, Playlist $playlist)
-    {
-        $this->authorize('owner', $playlist);
-
-        abort_if($playlist->is_smart, 403, 'A smart playlist\'s content cannot be updated manually.');
-
-        $playlist->songs()->sync((array) $request->songs);
-
-        return response()->json();
-    }
-
-    public function getSongs(Playlist $playlist)
-    {
-        $this->authorize('owner', $playlist);
-
-        return response()->json(
-            $playlist->is_smart
-                ? $this->smartPlaylistService->getSongs($playlist)->pluck('id')
-                : $playlist->songs->pluck('id')
+        return PlaylistResource::make(
+            $this->playlistService->updatePlaylist(
+                $playlist,
+                $request->name,
+                $folder,
+                $request->rules ? SmartPlaylistRuleGroupCollection::create(Arr::wrap($request->rules)) : null
+            )
         );
     }
 
     public function destroy(Playlist $playlist)
     {
-        $this->authorize('owner', $playlist);
+        $this->authorize('own', $playlist);
 
         $playlist->delete();
 
-        return response()->json();
+        return response()->noContent();
     }
 }

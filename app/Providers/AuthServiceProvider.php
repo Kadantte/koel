@@ -3,7 +3,9 @@
 namespace App\Providers;
 
 use App\Models\Playlist;
+use App\Models\PlaylistFolder;
 use App\Models\User;
+use App\Policies\PlaylistFolderPolicy;
 use App\Policies\PlaylistPolicy;
 use App\Policies\UserPolicy;
 use App\Services\TokenManager;
@@ -14,19 +16,12 @@ use Illuminate\Validation\Rules\Password;
 
 class AuthServiceProvider extends ServiceProvider
 {
-    /**
-     * The policy mappings for the application.
-     *
-     * @var array
-     */
     protected $policies = [
         Playlist::class => PlaylistPolicy::class,
         User::class => UserPolicy::class,
+        PlaylistFolder::class => PlaylistFolderPolicy::class,
     ];
 
-    /**
-     * Register any application authentication / authorization services.
-     */
     public function boot(): void
     {
         $this->registerPolicies();
@@ -35,7 +30,9 @@ class AuthServiceProvider extends ServiceProvider
             /** @var TokenManager $tokenManager */
             $tokenManager = app(TokenManager::class);
 
-            return $tokenManager->getUserFromPlainTextToken($request->api_token ?: '');
+            $token = $request->get('api_token') ?: $request->get('t');
+
+            return $tokenManager->getUserFromPlainTextToken($token ?: '');
         });
 
         $this->setPasswordDefaultRules();

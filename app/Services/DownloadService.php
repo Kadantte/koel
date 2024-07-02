@@ -7,44 +7,39 @@ use App\Models\Artist;
 use App\Models\Playlist;
 use App\Models\Song;
 use App\Models\SongZipArchive;
+use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Support\Collection;
 use InvalidArgumentException;
 
 class DownloadService
 {
-    private S3Service $s3Service;
-
-    public function __construct(S3Service $s3Service)
+    public function __construct(private S3Service $s3Service)
     {
-        $this->s3Service = $s3Service;
     }
 
     /**
      * Generic method to generate a download archive from various source types.
      *
-     * @param Song|Collection|Album|Artist|Playlist $mixed
-     *
-     * @throws InvalidArgumentException
-     *
      * @return string Full path to the generated archive
      */
-    public function from($mixed): string
+    public function from(Playlist|Song|Album|Artist|Collection $downloadable): string
     {
-        switch (get_class($mixed)) {
+        switch (get_class($downloadable)) {
             case Song::class:
-                return $this->fromSong($mixed);
+                return $this->fromSong($downloadable);
 
             case Collection::class:
-                return $this->fromMultipleSongs($mixed);
+            case EloquentCollection::class:
+                return $this->fromMultipleSongs($downloadable);
 
             case Album::class:
-                return $this->fromAlbum($mixed);
+                return $this->fromAlbum($downloadable);
 
             case Artist::class:
-                return $this->fromArtist($mixed);
+                return $this->fromArtist($downloadable);
 
             case Playlist::class:
-                return $this->fromPlaylist($mixed);
+                return $this->fromPlaylist($downloadable);
         }
 
         throw new InvalidArgumentException('Unsupported download type.');
@@ -72,7 +67,7 @@ class DownloadService
         return $localPath;
     }
 
-    protected function fromMultipleSongs(Collection $songs): string
+    private function fromMultipleSongs(Collection $songs): string
     {
         if ($songs->count() === 1) {
             return $this->fromSong($songs->first());
@@ -84,18 +79,24 @@ class DownloadService
             ->getPath();
     }
 
-    protected function fromPlaylist(Playlist $playlist): string
+    private function fromPlaylist(Playlist $playlist): string
     {
         return $this->fromMultipleSongs($playlist->songs);
     }
 
-    protected function fromAlbum(Album $album): string
+    private function fromAlbum(Album $album): string
     {
         return $this->fromMultipleSongs($album->songs);
     }
 
-    protected function fromArtist(Artist $artist): string
+    public function fromArtist(Artist $artist): string
     {
-        return $this->fromMultipleSongs($artist->songs);
+        // We cater to the case where the artist is an "album artist," which means she has songs through albums as well.
+        $songs = $artist->albums->reduce(
+            static fn (Collection $songs, Album $album) => $songs->merge($album->songs),
+            $artist->songs
+        )->unique('id');
+
+        return $this->fromMultipleSongs($songs);
     }
 }

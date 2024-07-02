@@ -5,10 +5,6 @@ namespace Tests\Feature;
 use App\Models\User;
 use App\Services\LastfmService;
 use App\Services\TokenManager;
-use GuzzleHttp\Client;
-use GuzzleHttp\Psr7\Response;
-use Illuminate\Contracts\Cache\Repository as Cache;
-use Illuminate\Log\Logger;
 use Laravel\Sanctum\NewAccessToken;
 use Laravel\Sanctum\PersonalAccessToken;
 use Mockery;
@@ -16,25 +12,14 @@ use Mockery\MockInterface;
 
 class LastfmTest extends TestCase
 {
-    public function testGetSessionKey(): void
-    {
-        /** @var Client $client */
-        $client = Mockery::mock(Client::class, [
-            'get' => new Response(200, [], file_get_contents(__DIR__ . '../../blobs/lastfm/session-key.json')),
-        ]);
-
-        $service = new LastfmService($client, app(Cache::class), app(Logger::class));
-        self::assertEquals('foo', $service->getSessionKey('bar'));
-    }
-
     public function testSetSessionKey(): void
     {
         /** @var User $user */
         $user = User::factory()->create();
-        $this->postAsUser('api/lastfm/session-key', ['key' => 'foo'], $user)
-            ->assertStatus(204);
+        $this->postAs('api/lastfm/session-key', ['key' => 'foo'], $user)
+            ->assertNoContent();
 
-        self::assertEquals('foo', $user->refresh()->lastfm_session_key);
+        self::assertSame('foo', $user->refresh()->lastfm_session_key);
     }
 
     public function testConnectToLastfm(): void
@@ -112,7 +97,7 @@ class LastfmTest extends TestCase
 
         $this->get('lastfm/callback?token=foo&api_token=my-token');
 
-        self::assertEquals('my-session-key', $user->refresh()->lastfm_session_key);
+        self::assertSame('my-session-key', $user->refresh()->lastfm_session_key);
     }
 
     public function testDisconnectUser(): void
@@ -120,7 +105,7 @@ class LastfmTest extends TestCase
         /** @var User $user */
         $user = User::factory()->create();
         self::assertNotNull($user->lastfm_session_key);
-        $this->deleteAsUser('api/lastfm/disconnect', [], $user);
+        $this->deleteAs('api/lastfm/disconnect', [], $user);
         $user->refresh();
 
         self::assertNull($user->lastfm_session_key);

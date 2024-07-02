@@ -2,15 +2,15 @@
 
 namespace App\Models;
 
-use App\Events\LibraryChanged;
-use App\Traits\SupportsDeleteWhereIDsNotIn;
-use Illuminate\Database\Eloquent\Builder;
+use App\Builders\SongBuilder;
+use Carbon\Carbon;
+use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
-use Illuminate\Support\Collection;
+use Illuminate\Support\Str;
 use Laravel\Scout\Searchable;
 
 /**
@@ -18,41 +18,34 @@ use Laravel\Scout\Searchable;
  * @property string $title
  * @property Album $album
  * @property Artist $artist
- * @property array<string> $s3_params
+ * @property Artist $album_artist
  * @property float $length
  * @property string $lyrics
  * @property int $track
  * @property int $disc
  * @property int $album_id
+ * @property int|null $year
+ * @property string $genre
  * @property string $id
  * @property int $artist_id
  * @property int $mtime
- * @property int $contributing_artist_id
- *
- * @method static self updateOrCreate(array $where, array $params)
- * @method static Builder select(string $string)
- * @method static Builder inDirectory(string $path)
- * @method static self first()
- * @method static Builder orderBy(...$args)
- * @method static int count()
- * @method static self|Collection|null find($id)
- * @method static Builder take(int $count)
+ * @property ?bool $liked Whether the song is liked by the current user (dynamically calculated)
+ * @property ?int $play_count The number of times the song has been played by the current user (dynamically calculated)
+ * @property Carbon $created_at
+ * @property array<mixed> $s3_params
  */
 class Song extends Model
 {
     use HasFactory;
     use Searchable;
-    use SupportsDeleteWhereIDsNotIn;
+    use SupportsDeleteWhereValueNotIn;
+
+    public const ID_REGEX = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 
     public $incrementing = false;
     protected $guarded = [];
 
-    /**
-     * Attributes to be hidden from JSON outputs.
-     * Here we specify to hide lyrics as well to save some bandwidth (actually, lots of it).
-     * Lyrics can then be queried on demand.
-     */
-    protected $hidden = ['lyrics', 'updated_at', 'path', 'mtime'];
+    protected $hidden = ['updated_at', 'path', 'mtime'];
 
     protected $casts = [
         'length' => 'float',
@@ -63,107 +56,19 @@ class Song extends Model
 
     protected $keyType = 'string';
 
-    /**
-     * Update song info.
-     *
-     * @param array<string> $ids
-     * @param array<string> $data the data array, with these supported fields:
-     * - title
-     * - artistName
-     * - albumName
-     * - lyrics
-     * All of these are optional, in which case the info will not be changed
-     * (except for lyrics, which will be emptied)
-     *
-     * @return Collection|array<Song>
-     */
-    public static function updateInfo(array $ids, array $data): Collection
+    protected static function booted(): void
     {
-        /*
-         * A collection of the updated songs.
-         *
-         * @var Collection
-         */
-        $updatedSongs = collect();
-
-        $ids = (array) $ids;
-        // If we're updating only one song, take into account the title, lyrics, and track number.
-        $single = count($ids) === 1;
-
-        foreach ($ids as $id) {
-            /** @var Song|null $song */
-            $song = self::with('album', 'album.artist')->find($id);
-
-            if (!$song) {
-                continue;
-            }
-
-            $updatedSongs->push($song->updateSingle(
-                $single ? trim($data['title']) : $song->title,
-                trim($data['albumName'] ?: $song->album->name),
-                trim($data['artistName']) ?: $song->artist->name,
-                $single ? trim($data['lyrics']) : $song->lyrics,
-                $single ? (int) $data['track'] : $song->track,
-                (int) $data['compilationState']
-            ));
-        }
-
-        // Our library may have been changed. Broadcast an event to tidy it up if need be.
-        if ($updatedSongs->count()) {
-            event(new LibraryChanged());
-        }
-
-        return $updatedSongs;
+        static::creating(static fn (self $song) => $song->id = Str::uuid()->toString());
     }
 
-    public function updateSingle(
-        string $title,
-        string $albumName,
-        string $artistName,
-        string $lyrics,
-        int $track,
-        int $compilationState
-    ): self {
-        if ($artistName === Artist::VARIOUS_NAME) {
-            // If the artist name is "Various Artists", it's a compilation song no matter what.
-            $compilationState = 1;
-            // and since we can't determine the real contributing artist, it's "Unknown"
-            $artistName = Artist::UNKNOWN_NAME;
-        }
+    public static function query(): SongBuilder
+    {
+        return parent::query();
+    }
 
-        $artist = Artist::getOrCreate($artistName);
-
-        switch ($compilationState) {
-            case 1: // ALL, or forcing compilation status to be Yes
-                $isCompilation = true;
-                break;
-
-            case 2: // Keep current compilation status
-                $isCompilation = $this->album->artist_id === Artist::VARIOUS_ID;
-                break;
-
-            default:
-                $isCompilation = false;
-                break;
-        }
-
-        $album = Album::getOrCreate($artist, $albumName, $isCompilation);
-
-        $this->artist_id = $artist->id;
-        $this->album_id = $album->id;
-        $this->title = $title;
-        $this->lyrics = $lyrics;
-        $this->track = $track;
-
-        $this->save();
-
-        // Clean up unnecessary data from the object
-        unset($this->album);
-        unset($this->artist);
-        // and make sure the lyrics is shown
-        $this->makeVisible('lyrics');
-
-        return $this;
+    public function newEloquentBuilder($query): SongBuilder
+    {
+        return new SongBuilder($query);
     }
 
     public function artist(): BelongsTo
@@ -176,6 +81,11 @@ class Song extends Model
         return $this->belongsTo(Album::class);
     }
 
+    public function album_artist(): BelongsTo // @phpcs:ignore
+    {
+        return $this->album->artist();
+    }
+
     public function playlists(): BelongsToMany
     {
         return $this->belongsToMany(Playlist::class);
@@ -186,60 +96,43 @@ class Song extends Model
         return $this->hasMany(Interaction::class);
     }
 
-    /**
-     * Scope a query to only include songs in a given directory.
-     */
-    public function scopeInDirectory(Builder $query, string $path): Builder
+    protected function title(): Attribute
     {
-        // Make sure the path ends with a directory separator.
-        $path = rtrim(trim($path), DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
-
-        return $query->where('path', 'LIKE', "$path%");
+        return new Attribute(
+            get: fn (?string $value) => $value ?: pathinfo($this->path, PATHINFO_FILENAME),
+            set: static fn (string $value) => html_entity_decode($value)
+        );
     }
 
-    /**
-     * Sometimes the tags extracted from getID3 are HTML entity encoded.
-     * This makes sure they are always sane.
-     */
-    public function setTitleAttribute(string $value): void
+    protected function lyrics(): Attribute
     {
-        $this->attributes['title'] = html_entity_decode($value);
+        $normalizer = static function (?string $value): string {
+            // Since we're displaying the lyrics using <pre>, replace breaks with newlines and strip all tags.
+            $value = strip_tags(preg_replace('#<br\s*/?>#i', PHP_EOL, $value));
+
+            // also remove the timestamps that often come with LRC files
+            return preg_replace('/\[\d{2}:\d{2}.\d{2}]\s*/m', '', $value);
+        };
+
+        return new Attribute(get: $normalizer, set: $normalizer);
     }
 
-    /**
-     * Some songs don't have a title.
-     * Fall back to the file name (without extension) for such.
-     */
-    public function getTitleAttribute(?string $value): string
+    protected function s3Params(): Attribute
     {
-        return $value ?: pathinfo($this->path, PATHINFO_FILENAME);
+        return Attribute::get(function (): ?array {
+            if (!preg_match('/^s3:\\/\\/(.*)/', $this->path, $matches)) {
+                return null;
+            }
+
+            [$bucket, $key] = explode('/', $matches[1], 2);
+
+            return compact('bucket', 'key');
+        });
     }
 
-    /**
-     * Prepare the lyrics for displaying.
-     */
-    public function getLyricsAttribute(string $value): string
+    public static function getPathFromS3BucketAndKey(string $bucket, string $key): string
     {
-        // We don't use nl2br() here, because the function actually preserves line breaks -
-        // it just _appends_ a "<br />" after each of them. This would cause our client
-        // implementation of br2nl to fail with duplicated line breaks.
-        return str_replace(["\r\n", "\r", "\n"], '<br />', $value);
-    }
-
-    /**
-     * Get the bucket and key name of an S3 object.
-     *
-     * @return array<string>|null
-     */
-    public function getS3ParamsAttribute(): ?array
-    {
-        if (!preg_match('/^s3:\\/\\/(.*)/', $this->path, $matches)) {
-            return null;
-        }
-
-        [$bucket, $key] = explode('/', $matches[1], 2);
-
-        return compact('bucket', 'key');
+        return "s3://$bucket/$key";
     }
 
     /** @return array<mixed> */

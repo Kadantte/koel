@@ -82,7 +82,7 @@ return [
     |
     */
 
-    'key' => env('APP_KEY', 'SomeRandomStringWith32Characters'),
+    'key' => env('APP_KEY'),
 
     'cipher' => 'AES-256-CBC',
 
@@ -145,6 +145,7 @@ return [
         App\Providers\ITunesServiceProvider::class,
         App\Providers\StreamerServiceProvider::class,
         App\Providers\ObjectStorageServiceProvider::class,
+        App\Providers\MacroProvider::class,
     ],
 
     /*

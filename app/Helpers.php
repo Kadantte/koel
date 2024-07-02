@@ -1,5 +1,7 @@
 <?php
 
+use Illuminate\Support\Facades\Log;
+
 /**
  * Get a URL for static file requests.
  * If this installation of Koel has a CDN_URL configured, use it as the base.
@@ -14,51 +16,57 @@ function static_url(?string $name = null): string
     return $cdnUrl ? $cdnUrl . '/' . trim(ltrim($name, '/')) : trim(asset($name));
 }
 
-/**
- * A copy of Laravel Mix but catered to our directory structure.
- *
- * @throws InvalidArgumentException
- */
-function asset_rev(string $file, ?string $manifestFile = null): string
+function album_cover_path(?string $fileName): ?string
 {
-    static $manifest = null;
-
-    $manifestFile = $manifestFile ?: public_path('mix-manifest.json');
-
-    if ($manifest === null) {
-        $manifest = json_decode(file_get_contents($manifestFile), true);
-    }
-
-    if (isset($manifest[$file])) {
-        return file_exists(public_path('hot'))
-            ? "http://localhost:8080$manifest[$file]"
-            : static_url($manifest[$file]);
-    }
-
-    throw new InvalidArgumentException("File $file not defined in asset manifest.");
+    return $fileName ? public_path(config('koel.album_cover_dir') . $fileName) : null;
 }
 
-function album_cover_path(string $fileName): string
+function album_cover_url(?string $fileName): ?string
 {
-    return public_path(config('koel.album_cover_dir') . $fileName);
+    return $fileName ? static_url(config('koel.album_cover_dir') . $fileName) : null;
 }
 
-function album_cover_url(string $fileName): string
+function artist_image_path(?string $fileName): ?string
 {
-    return static_url(config('koel.album_cover_dir') . $fileName);
+    return $fileName ? public_path(config('koel.artist_image_dir') . $fileName) : null;
 }
 
-function artist_image_path(string $fileName): string
+function artist_image_url(?string $fileName): ?string
 {
-    return public_path(config('koel.artist_image_dir') . $fileName);
-}
-
-function artist_image_url(string $fileName): string
-{
-    return static_url(config('koel.artist_image_dir') . $fileName);
+    return $fileName ? static_url(config('koel.artist_image_dir') . $fileName) : null;
 }
 
 function koel_version(): string
 {
     return trim(file_get_contents(base_path('.version')));
+}
+
+/**
+ * @throws Throwable
+ */
+function attempt(callable $callback, bool $log = true): mixed
+{
+    try {
+        return $callback();
+    } catch (Throwable $e) {
+        if (app()->runningUnitTests()) {
+            throw $e;
+        }
+
+        if ($log) {
+            Log::error('Failed attempt', ['error' => $e]);
+        }
+
+        return null;
+    }
+}
+
+function attempt_if($condition, callable $callback, bool $log = true): mixed
+{
+    return value($condition) ? attempt($callback, $log) : null;
+}
+
+function attempt_unless($condition, callable $callback, bool $log = true): mixed
+{
+    return !value($condition) ? attempt($callback, $log) : null;
 }

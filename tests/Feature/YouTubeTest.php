@@ -5,10 +5,11 @@ namespace Tests\Feature;
 use App\Models\Song;
 use App\Services\YouTubeService;
 use Mockery;
+use Mockery\MockInterface;
 
 class YouTubeTest extends TestCase
 {
-    private $youTubeService;
+    private MockInterface $youTubeService;
 
     public function setUp(): void
     {
@@ -20,16 +21,16 @@ class YouTubeTest extends TestCase
     public function testSearchYouTubeVideos(): void
     {
         static::createSampleMediaSet();
-        $song = Song::first();
+
+        /** @var Song $song */
+        $song = Song::query()->first();
 
         $this->youTubeService
             ->shouldReceive('searchVideosRelatedToSong')
-            ->with(Mockery::on(static function (Song $retrievedSong) use ($song) {
-                return $song->id === $retrievedSong->id;
-            }), 'foo')
+            ->with(Mockery::on(static fn (Song $retrievedSong) => $song->is($retrievedSong)), 'foo')
             ->once();
 
-        $this->getAsUser("/api/youtube/search/song/{$song->id}?pageToken=foo")
+        $this->getAs("/api/youtube/search/song/{$song->id}?pageToken=foo")
             ->assertOk();
     }
 }

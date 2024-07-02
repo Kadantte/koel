@@ -2,38 +2,42 @@
 
 namespace App\Models;
 
-use App\Traits\CanFilterByUser;
-use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Database\Eloquent\Collection;
+use App\Casts\SmartPlaylistRulesCast;
+use App\Values\SmartPlaylistRuleGroupCollection;
+use Carbon\Carbon;
+use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Support\Collection;
 use Laravel\Scout\Searchable;
 
 /**
- * @property int $user_id
- * @property Collection $songs
  * @property int $id
- * @property array $rules
- * @property bool $is_smart
  * @property string $name
- * @property user $user
- *
- * @method static Builder orderBy(string $field, string $order = 'asc')
+ * @property bool $is_smart
+ * @property int $user_id
+ * @property User $user
+ * @property ?string $folder_id
+ * @property ?PlaylistFolder $folder
+ * @property Collection|array<array-key, Song> $songs
+ * @property ?SmartPlaylistRuleGroupCollection $rule_groups
+ * @property ?SmartPlaylistRuleGroupCollection $rules
+ * @property Carbon $created_at
  */
 class Playlist extends Model
 {
     use Searchable;
-    use CanFilterByUser;
     use HasFactory;
 
     protected $hidden = ['user_id', 'created_at', 'updated_at'];
     protected $guarded = ['id'];
+
     protected $casts = [
-        'user_id' => 'int',
-        'rules' => 'array',
+        'rules' => SmartPlaylistRulesCast::class,
     ];
+
     protected $appends = ['is_smart'];
 
     public function songs(): BelongsToMany
@@ -46,9 +50,20 @@ class Playlist extends Model
         return $this->belongsTo(User::class);
     }
 
-    public function getIsSmartAttribute(): bool
+    public function folder(): BelongsTo
     {
-        return (bool) $this->rules;
+        return $this->belongsTo(PlaylistFolder::class);
+    }
+
+    protected function isSmart(): Attribute
+    {
+        return Attribute::get(fn (): bool => (bool) $this->rule_groups?->isNotEmpty());
+    }
+
+    protected function ruleGroups(): Attribute
+    {
+        // aliasing the attribute to avoid confusion
+        return Attribute::get(fn () => $this->rules);
     }
 
     /** @return array<mixed> */

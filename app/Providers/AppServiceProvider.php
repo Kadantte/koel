@@ -2,12 +2,17 @@
 
 namespace App\Providers;
 
+use App\Services\LastfmService;
+use App\Services\MusicEncyclopedia;
+use App\Services\NullMusicEncyclopedia;
+use App\Services\SpotifyService;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\Schema\Builder;
 use Illuminate\Database\SQLiteConnection;
+use Illuminate\Http\Resources\Json\JsonResource;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Validation\Factory as Validator;
-use Laravel\Tinker\TinkerServiceProvider;
+use SpotifyWebAPI\Session as SpotifySession;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -26,6 +31,19 @@ class AppServiceProvider extends ServiceProvider
 
         // Add some custom validation rules
         $validator->extend('path.valid', static fn ($attribute, $value): bool => is_dir($value) && is_readable($value));
+
+        // disable wrapping JSON resource in a `data` key
+        JsonResource::withoutWrapping();
+
+        $this->app->bind(SpotifySession::class, static function () {
+            return SpotifyService::enabled()
+                ? new SpotifySession(config('koel.spotify.client_id'), config('koel.spotify.client_secret'))
+                : null;
+        });
+
+        $this->app->bind(MusicEncyclopedia::class, function () {
+            return $this->app->get(LastfmService::enabled() ? LastfmService::class : NullMusicEncyclopedia::class);
+        });
     }
 
     /**
@@ -33,8 +51,8 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        if ($this->app->environment() !== 'production') {
-            $this->app->register(TinkerServiceProvider::class);
+        if ($this->app->environment() !== 'production' && class_exists('Laravel\Tinker\TinkerServiceProvider')) {
+            $this->app->register('Laravel\Tinker\TinkerServiceProvider');
         }
     }
 }

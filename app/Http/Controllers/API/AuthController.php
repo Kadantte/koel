@@ -2,56 +2,49 @@
 
 namespace App\Http\Controllers\API;
 
+use App\Exceptions\InvalidCredentialsException;
+use App\Http\Controllers\Controller;
 use App\Http\Requests\API\UserLoginRequest;
-use App\Models\User;
-use App\Repositories\UserRepository;
-use App\Services\TokenManager;
-use Illuminate\Contracts\Auth\Authenticatable;
+use App\Services\AuthenticationService;
 use Illuminate\Foundation\Auth\ThrottlesLogins;
-use Illuminate\Hashing\HashManager;
+use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 
 class AuthController extends Controller
 {
     use ThrottlesLogins;
 
-    private UserRepository $userRepository;
-    private HashManager $hash;
-    private TokenManager $tokenManager;
-
-    /** @var User */
-    private ?Authenticatable $currentUser = null;
-
-    public function __construct(
-        UserRepository $userRepository,
-        HashManager $hash,
-        TokenManager $tokenManager,
-        ?Authenticatable $currentUser
-    ) {
-        $this->userRepository = $userRepository;
-        $this->hash = $hash;
-        $this->currentUser = $currentUser;
-        $this->tokenManager = $tokenManager;
+    public function __construct(private AuthenticationService $auth)
+    {
     }
 
     public function login(UserLoginRequest $request)
     {
-        /** @var User|null $user */
-        $user = $this->userRepository->getFirstWhere('email', $request->email);
-
-        if (!$user || !$this->hash->check($request->password, $user->password)) {
-            abort(Response::HTTP_UNAUTHORIZED, 'Invalid credentials');
+        if ($this->hasTooManyLoginAttempts($request)) {
+            $this->fireLockoutEvent($request);
+            $this->sendLockoutResponse($request);
         }
 
-        return response()->json([
-            'token' => $this->tokenManager->createToken($user)->plainTextToken,
-        ]);
+        try {
+            return response()->json($this->auth->login($request->email, $request->password)->toArray());
+        } catch (InvalidCredentialsException) {
+            $this->incrementLoginAttempts($request);
+            abort(Response::HTTP_UNAUTHORIZED, 'Invalid credentials');
+        }
     }
 
-    public function logout()
+    public function logout(Request $request)
     {
-        $this->tokenManager->destroyTokens($this->currentUser);
+        attempt(fn () => $this->auth->logoutViaBearerToken($request->bearerToken()));
 
-        return response()->json(null, Response::HTTP_NO_CONTENT);
+        return response()->noContent();
+    }
+
+    /**
+     * For the throttle middleware.
+     */
+    protected function username(): string
+    {
+        return 'email';
     }
 }

@@ -19,16 +19,21 @@ class PhpStreamer extends Streamer implements DirectStreamerInterface
     public function stream(): void
     {
         try {
-            $rangeSet = RangeSet::createFromHeader(get_request_header('Range'));
-            $resource = new FileResource($this->song->path);
+            $rangeHeader = get_request_header('Range');
+
+            // On Safari, "Range" header value can be "bytes=0-1" which breaks streaming.
+            $rangeHeader = $rangeHeader === 'bytes=0-1' ? 'bytes=0-' : $rangeHeader;
+
+            $rangeSet = RangeSet::createFromHeader($rangeHeader);
+            $resource = new FileResource($this->song->path, mime_content_type($this->song->path));
             (new ResourceServlet($resource))->sendResource($rangeSet);
-        } catch (InvalidRangeHeaderException $e) {
+        } catch (InvalidRangeHeaderException) {
             abort(Response::HTTP_BAD_REQUEST);
-        } catch (UnsatisfiableRangeException $e) {
+        } catch (UnsatisfiableRangeException) {
             abort(Response::HTTP_REQUESTED_RANGE_NOT_SATISFIABLE);
-        } catch (NonExistentFileException $e) {
+        } catch (NonExistentFileException) {
             abort(Response::HTTP_NOT_FOUND);
-        } catch (UnreadableFileException $e) {
+        } catch (UnreadableFileException) {
             abort(Response::HTTP_INTERNAL_SERVER_ERROR);
         } catch (SendFileFailureException $e) {
             abort_unless(headers_sent(), Response::HTTP_INTERNAL_SERVER_ERROR);

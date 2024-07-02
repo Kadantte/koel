@@ -37,6 +37,7 @@ return [
         'bitrate' => env('OUTPUT_BIT_RATE', 128),
         'method' => env('STREAMING_METHOD'),
         'ffmpeg_path' => env('FFMPEG_PATH'),
+        'transcode_flac' => env('TRANSCODE_FLAC', true),
     ],
 
     /*
@@ -67,6 +68,21 @@ return [
         'secret' => env('LASTFM_API_SECRET'),
         'endpoint' => 'https://ws.audioscrobbler.com/2.0',
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Last.FM Integration
+    |--------------------------------------------------------------------------
+    |
+    | See wiki on how to integrate with Last.FM
+    |
+    */
+
+    'spotify' => [
+        'client_id' => env('SPOTIFY_CLIENT_ID'),
+        'client_secret' => env('SPOTIFY_CLIENT_SECRET'),
+    ],
+
 
     /*
     |--------------------------------------------------------------------------
@@ -111,10 +127,11 @@ return [
     ],
 
     'cache_media' => env('CACHE_MEDIA', true),
-
     'memory_limit' => env('MEMORY_LIMIT'),
-
     'force_https' => env('FORCE_HTTPS', false),
+    'backup_on_delete' => env('BACKUP_ON_DELETE', true),
+
+    'sync_log_level' => env('SYNC_LOG_LEVEL', 'error'),
 
     'misc' => [
         'home_url' => 'https://koel.dev',

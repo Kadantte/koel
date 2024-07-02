@@ -2,9 +2,9 @@
 
 namespace Tests\Unit\Stubs;
 
-use App\Services\AbstractApiClient;
+use App\Services\ApiClients\ApiClient;
 
-class ConcreteApiClient extends AbstractApiClient
+class ConcreteApiClient extends ApiClient
 {
     public function getKey(): string
     {
@@ -18,6 +18,6 @@ class ConcreteApiClient extends AbstractApiClient
 
     public function getEndpoint(): string
     {
-        return 'http://foo.com';
+        return 'https://foo.com';
     }
 }

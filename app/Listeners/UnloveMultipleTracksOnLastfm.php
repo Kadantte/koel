@@ -8,11 +8,8 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 
 class UnloveMultipleTracksOnLastfm implements ShouldQueue
 {
-    private LastfmService $lastfm;
-
-    public function __construct(LastfmService $lastfm)
+    public function __construct(private LastfmService $lastfm)
     {
-        $this->lastfm = $lastfm;
     }
 
     public function handle(SongsBatchUnliked $event): void

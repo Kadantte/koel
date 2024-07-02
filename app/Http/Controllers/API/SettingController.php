@@ -2,29 +2,25 @@
 
 namespace App\Http\Controllers\API;
 
+use App\Http\Controllers\Controller;
 use App\Http\Requests\API\SettingRequest;
 use App\Models\Setting;
+use App\Models\User;
 use App\Services\MediaSyncService;
-use Illuminate\Http\Response;
 
 class SettingController extends Controller
 {
-    private MediaSyncService $mediaSyncService;
-
-    public function __construct(MediaSyncService $mediaSyncService)
+    public function __construct(private MediaSyncService $mediaSyncService)
     {
-        $this->mediaSyncService = $mediaSyncService;
     }
 
-    // @TODO: This should be a PUT request
-    public function store(SettingRequest $request)
+    public function update(SettingRequest $request)
     {
-        Setting::set('media_path', rtrim(trim($request->media_path), '/'));
+        $this->authorize('admin', User::class);
 
-        // In a next version we should opt for a "MediaPathChanged" event,
-        // but let's just do this async now.
+        Setting::set('media_path', rtrim(trim($request->media_path), '/'));
         $this->mediaSyncService->sync();
 
-        return response()->json(null, Response::HTTP_NO_CONTENT);
+        return response()->noContent();
     }
 }

@@ -2,37 +2,36 @@
 
 namespace App\Http;
 
+use App\Http\Middleware\AudioAuthenticate;
 use App\Http\Middleware\Authenticate;
 use App\Http\Middleware\ForceHttps;
 use App\Http\Middleware\ObjectStorageAuthenticate;
+use App\Http\Middleware\ThrottleRequests;
 use App\Http\Middleware\TrimStrings;
 use Illuminate\Auth\Middleware\Authorize;
 use Illuminate\Foundation\Http\Kernel as HttpKernel;
 use Illuminate\Foundation\Http\Middleware\CheckForMaintenanceMode;
-use Illuminate\Foundation\Http\Middleware\ConvertEmptyStringsToNull;
 use Illuminate\Foundation\Http\Middleware\ValidatePostSize;
 use Illuminate\Routing\Middleware\SubstituteBindings;
-use Illuminate\Routing\Middleware\ThrottleRequests;
 
 class Kernel extends HttpKernel
 {
     /**
      * The application's global HTTP middleware stack.
      *
-     * @var array
+     * @var array<int,class-string>
      */
     protected $middleware = [
         CheckForMaintenanceMode::class,
         ValidatePostSize::class,
         TrimStrings::class,
-        ConvertEmptyStringsToNull::class,
         ForceHttps::class,
     ];
 
     /**
      * The application's route middleware groups.
      *
-     * @var array
+     * @var array<string,array<int,string>>
      */
     protected $middlewareGroups = [
         'web' => [
@@ -47,10 +46,11 @@ class Kernel extends HttpKernel
     /**
      * The application's route middleware.
      *
-     * @var array
+     * @var array<string,class-string>
      */
     protected $routeMiddleware = [
         'auth' => Authenticate::class,
+        'audio.auth' => AudioAuthenticate::class,
         'os.auth' => ObjectStorageAuthenticate::class,
         'bindings' => SubstituteBindings::class,
         'can' => Authorize::class,

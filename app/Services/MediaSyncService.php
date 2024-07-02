@@ -2,133 +2,73 @@
 
 namespace App\Services;
 
-use App\Console\Commands\SyncCommand;
 use App\Events\LibraryChanged;
+use App\Events\MediaSyncCompleted;
 use App\Libraries\WatchRecord\WatchRecordInterface;
-use App\Models\Album;
-use App\Models\Artist;
-use App\Models\Setting;
 use App\Models\Song;
-use App\Repositories\AlbumRepository;
-use App\Repositories\ArtistRepository;
+use App\Repositories\SettingRepository;
 use App\Repositories\SongRepository;
+use App\Values\SyncResult;
+use App\Values\SyncResultCollection;
 use Psr\Log\LoggerInterface;
 use SplFileInfo;
 use Symfony\Component\Finder\Finder;
+use Throwable;
 
 class MediaSyncService
 {
-    /**
-     * All applicable tags in a media file that we cater for.
-     * Note that each isn't necessarily a valid ID3 tag name.
-     */
-    public const APPLICABLE_TAGS = [
-        'artist',
-        'album',
-        'title',
-        'length',
-        'track',
-        'disc',
-        'lyrics',
-        'cover',
-        'mtime',
-        'compilation',
-    ];
-
-    private SongRepository $songRepository;
-    private HelperService $helperService;
-    private FileSynchronizer $fileSynchronizer;
-    private Finder $finder;
-    private ArtistRepository $artistRepository;
-    private AlbumRepository $albumRepository;
-    private LoggerInterface $logger;
+    /** @var array<array-key, callable> */
+    private array $events = [];
 
     public function __construct(
-        SongRepository $songRepository,
-        ArtistRepository $artistRepository,
-        AlbumRepository $albumRepository,
-        HelperService $helperService,
-        FileSynchronizer $fileSynchronizer,
-        Finder $finder,
-        LoggerInterface $logger
+        private SettingRepository $settingRepository,
+        private SongRepository $songRepository,
+        private FileSynchronizer $fileSynchronizer,
+        private Finder $finder,
+        private LoggerInterface $logger
     ) {
-        $this->songRepository = $songRepository;
-        $this->helperService = $helperService;
-        $this->fileSynchronizer = $fileSynchronizer;
-        $this->finder = $finder;
-        $this->artistRepository = $artistRepository;
-        $this->albumRepository = $albumRepository;
-        $this->logger = $logger;
     }
 
     /**
-     * Tags to be synced.
-     */
-    protected array $tags = [];
-
-    /**
-     * Sync the media. Oh sync the media.
-     *
-     * @param array<string> $tags The tags to sync.
+     * @param array<string> $ignores The tags to ignore.
      * Only taken into account for existing records.
      * New records will have all tags synced in regardless.
      * @param bool $force Whether to force syncing even unchanged files
-     * @param SyncCommand $syncCommand the SyncMedia command object, to log to console if executed by artisan
      */
-    public function sync(
-        ?string $mediaPath = null,
-        array $tags = [],
-        bool $force = false,
-        ?SyncCommand $syncCommand = null
-    ): void {
+    public function sync(array $ignores = [], bool $force = false): SyncResultCollection
+    {
+        /** @var string $mediaPath */
+        $mediaPath = $this->settingRepository->getByKey('media_path');
+
         $this->setSystemRequirements();
-        $this->setTags($tags);
 
-        $results = [
-            'success' => [],
-            'bad_files' => [],
-            'unmodified' => [],
-        ];
+        $results = SyncResultCollection::create();
+        $songPaths = $this->gatherFiles($mediaPath);
 
-        $songPaths = $this->gatherFiles($mediaPath ?: Setting::get('media_path'));
-
-        if ($syncCommand) {
-            $syncCommand->createProgressBar(count($songPaths));
+        if (isset($this->events['paths-gathered'])) {
+            $this->events['paths-gathered']($songPaths);
         }
 
         foreach ($songPaths as $path) {
-            $result = $this->fileSynchronizer->setFile($path)->sync($this->tags, $force);
-
-            switch ($result) {
-                case FileSynchronizer::SYNC_RESULT_SUCCESS:
-                    $results['success'][] = $path;
-                    break;
-
-                case FileSynchronizer::SYNC_RESULT_UNMODIFIED:
-                    $results['unmodified'][] = $path;
-                    break;
-
-                default:
-                    $results['bad_files'][] = $path;
-                    break;
+            try {
+                $result = $this->fileSynchronizer->setFile($path)->sync($ignores, $force);
+            } catch (Throwable) {
+                $result = SyncResult::error($path, 'Possible invalid file');
             }
 
-            if ($syncCommand) {
-                $syncCommand->advanceProgressBar();
-                $syncCommand->logSyncStatusToConsole($path, $result, $this->fileSynchronizer->getSyncError());
+            $results->add($result);
+
+            if (isset($this->events['progress'])) {
+                $this->events['progress']($result);
             }
         }
 
-        // Delete non-existing songs.
-        $hashes = array_map(
-            fn (string $path): string => $this->helperService->getFileHash($path),
-            array_merge($results['unmodified'], $results['success'])
-        );
+        event(new MediaSyncCompleted($results));
 
-        Song::deleteWhereIDsNotIn($hashes);
-
-        // Trigger LibraryChanged, so that TidyLibrary handler is fired to, erm, tidy our library.
+        // Trigger LibraryChanged, so that PruneLibrary handler is fired to prune the lib.
         event(new LibraryChanged());
+
+        return $results;
     }
 
     /**
@@ -138,15 +78,15 @@ class MediaSyncService
      *
      * @return array<SplFileInfo>
      */
-    public function gatherFiles(string $path): array
+    private function gatherFiles(string $path): array
     {
         return iterator_to_array(
             $this->finder->create()
                 ->ignoreUnreadableDirs()
-                ->ignoreDotFiles((bool) config('koel.ignore_dot_files')) // https://github.com/phanan/koel/issues/450
+                ->ignoreDotFiles((bool) config('koel.ignore_dot_files')) // https://github.com/koel/koel/issues/450
                 ->files()
                 ->followLinks()
-                ->name('/\.(mp3|ogg|m4a|flac)$/i')
+                ->name('/\.(mp3|wav|ogg|m4a|flac|opus)$/i')
                 ->in($path)
         );
     }
@@ -181,35 +121,6 @@ class MediaSyncService
         }
     }
 
-    /**
-     * Construct an array of tags to be synced into the database from an input array of tags.
-     * If the input array is empty or contains only invalid items, we use all tags.
-     * Otherwise, we only use the valid items in it.
-     *
-     * @param array<string> $tags
-     */
-    public function setTags(array $tags = []): void
-    {
-        $this->tags = array_intersect($tags, self::APPLICABLE_TAGS) ?: self::APPLICABLE_TAGS;
-
-        // We always keep track of mtime.
-        if (!in_array('mtime', $this->tags, true)) {
-            $this->tags[] = 'mtime';
-        }
-    }
-
-    public function tidy(): void
-    {
-        $inUseAlbums = $this->albumRepository->getNonEmptyAlbumIds();
-        $inUseAlbums[] = Album::UNKNOWN_ID;
-        Album::deleteWhereIDsNotIn($inUseAlbums);
-
-        $inUseArtists = $this->artistRepository->getNonEmptyArtistIds();
-        $inUseArtists[] = Artist::UNKNOWN_ID;
-        $inUseArtists[] = Artist::VARIOUS_ID;
-        Artist::deleteWhereIDsNotIn(array_filter($inUseArtists));
-    }
-
     private function setSystemRequirements(): void
     {
         if (!app()->runningInConsole()) {
@@ -236,9 +147,9 @@ class MediaSyncService
 
     private function handleNewOrModifiedFileRecord(string $path): void
     {
-        $result = $this->fileSynchronizer->setFile($path)->sync($this->tags);
+        $result = $this->fileSynchronizer->setFile($path)->sync();
 
-        if ($result === FileSynchronizer::SYNC_RESULT_SUCCESS) {
+        if ($result->isSuccess()) {
             $this->logger->info("Synchronized $path");
         } else {
             $this->logger->info("Failed to synchronized $path. Maybe an invalid file?");
@@ -249,7 +160,7 @@ class MediaSyncService
 
     private function handleDeletedDirectoryRecord(string $path): void
     {
-        $count = Song::inDirectory($path)->delete();
+        $count = Song::query()->inDirectory($path)->delete();
 
         if ($count) {
             $this->logger->info("Deleted $count song(s) under $path");
@@ -262,12 +173,24 @@ class MediaSyncService
 
     private function handleNewOrModifiedDirectoryRecord(string $path): void
     {
+        $syncResults = SyncResultCollection::create();
+
         foreach ($this->gatherFiles($path) as $file) {
-            $this->fileSynchronizer->setFile($file)->sync($this->tags);
+            try {
+                $syncResults->add($this->fileSynchronizer->setFile($file)->sync());
+            } catch (Throwable) {
+                $syncResults->add(SyncResult::error($file->getRealPath(), 'Possible invalid file'));
+            }
         }
 
         $this->logger->info("Synced all song(s) under $path");
 
+        event(new MediaSyncCompleted($syncResults));
         event(new LibraryChanged());
+    }
+
+    public function on(string $event, callable $callback): void
+    {
+        $this->events[$event] = $callback;
     }
 }

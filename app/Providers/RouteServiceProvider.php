@@ -4,61 +4,43 @@ namespace App\Providers;
 
 use Illuminate\Foundation\Support\Providers\RouteServiceProvider as ServiceProvider;
 use Illuminate\Support\Facades\Route;
+use Webmozart\Assert\Assert;
 
 class RouteServiceProvider extends ServiceProvider
 {
-    /**
-     * This namespace is applied to the controller routes in your routes file.
-     *
-     * In addition, it is set as the URL generator's root namespace.
-     *
-     * @var string
-     */
     protected $namespace = 'App\Http\Controllers';
 
-    /**
-     * Define your route model bindings, pattern filters, etc.
-     *
-     */
-    public function boot(): void
-    {
-        parent::boot();
-    }
-
-    /**
-     * Define the routes for the application.
-     *
-     */
     public function map(): void
     {
-        $this->mapApiRoutes();
-        $this->mapWebRoutes();
+        self::loadVersionAwareRoutes('web');
+        self::loadVersionAwareRoutes('api');
     }
 
-    /**
-     * Define the "web" routes for the application.
-     *
-     * These routes all receive session state, CSRF protection, etc.
-     *
-     */
-    protected function mapWebRoutes(): void
+    private static function loadVersionAwareRoutes(string $type): void
     {
-        Route::middleware('web')
-             ->namespace($this->namespace)
-             ->group(base_path('routes/web.php'));
+        Assert::oneOf($type, ['web', 'api']);
+
+        Route::group([], base_path(sprintf('routes/%s.base.php', $type)));
+
+        $apiVersion = self::getApiVersion();
+        $routeFile = $apiVersion ? base_path(sprintf('routes/%s.%s.php', $type, $apiVersion)) : null;
+
+        if ($routeFile && file_exists($routeFile)) {
+            Route::group([], $routeFile);
+        }
     }
 
-    /**
-     * Define the "api" routes for the application.
-     *
-     * These routes are typically stateless.
-     *
-     */
-    protected function mapApiRoutes(): void
+    private static function getApiVersion(): ?string
     {
-        Route::prefix('api')
-            ->middleware('api')
-            ->namespace($this->namespace)
-            ->group(base_path('routes/api.php'));
+        // In the test environment, the route service provider is loaded _before_ the request is made,
+        // so we can't rely on the header.
+        // Instead, we manually set the API version as an env variable in applicable test cases.
+        $version = app()->runningUnitTests() ? env('X_API_VERSION') : request()->header('X-Api-Version');
+
+        if ($version) {
+            Assert::oneOf($version, ['v6']);
+        }
+
+        return $version;
     }
 }

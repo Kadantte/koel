@@ -3,19 +3,16 @@
 namespace App\Rules;
 
 use Illuminate\Contracts\Validation\Rule;
-use Throwable;
 
 class ImageData implements Rule
 {
     public function passes($attribute, $value): bool
     {
-        try {
+        return attempt(static function () use ($value) {
             [$header,] = explode(';', $value);
 
-            return (bool) preg_match('/data:image\/(jpe?g|png|gif)/i', $header);
-        } catch (Throwable $exception) {
-            return false;
-        }
+            return (bool) preg_match('/data:image\/(jpe?g|png|webp|gif)/i', $header);
+        }, false) ?? false;
     }
 
     public function message(): string

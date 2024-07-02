@@ -4,7 +4,6 @@ namespace Tests\Integration\Repositories;
 
 use App\Models\Song;
 use App\Repositories\SongRepository;
-use App\Services\HelperService;
 use Tests\TestCase;
 
 class SongRepositoryTest extends TestCase
@@ -15,7 +14,7 @@ class SongRepositoryTest extends TestCase
     {
         parent::setUp();
 
-        $this->songRepository = new SongRepository(new HelperService());
+        $this->songRepository = app(SongRepository::class);
     }
 
     public function testGetOneByPath(): void

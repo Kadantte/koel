@@ -14,7 +14,6 @@ koel.db
 
 ### Node ###
 # Logs
-logs
 *.log
 npm-debug.log*
 
@@ -75,8 +74,9 @@ Temporary Items
 *~
 
 # Cypress
-cypress/screenshots
-cypress/videos
+cypress/screenshots/
+cypress/videos/
+cypress/downloads/
 
 /log
 coverage.xml
@@ -84,3 +84,5 @@ coverage.xml
 log.json
 
 .php_cs.cache
+
+demo-credits.json
