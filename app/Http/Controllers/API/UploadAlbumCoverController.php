@@ -2,24 +2,21 @@
 
 namespace App\Http\Controllers\API;
 
-use App\Events\LibraryChanged;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\API\UploadAlbumCoverRequest;
 use App\Models\Album;
 use App\Services\MediaMetadataService;
+use Illuminate\Support\Facades\Cache;
 
 class UploadAlbumCoverController extends Controller
 {
-    public function __invoke(UploadAlbumCoverRequest $request, Album $album, MediaMetadataService $mediaMetadataService)
+    public function __invoke(UploadAlbumCoverRequest $request, Album $album, MediaMetadataService $metadataService)
     {
-        $mediaMetadataService->writeAlbumCover(
-            $album,
-            $request->getFileContentAsBinaryString(),
-            $request->getFileExtension()
-        );
+        $this->authorize('update', $album);
+        $metadataService->writeAlbumCover($album, $request->getFileContent());
 
-        event(new LibraryChanged());
+        Cache::delete("album.info.$album->id");
 
-        return response()->json(['coverUrl' => $album->cover]);
+        return response()->json(['cover_url' => $album->cover]);
     }
 }
