@@ -1,23 +1,29 @@
 import factory from 'factoria'
-import { Faker } from '@faker-js/faker'
+import { faker } from '@faker-js/faker'
 
-export default (faker: Faker): Playlist => ({
+export default (): Playlist => ({
   type: 'playlists',
-  id: faker.datatype.number(),
-  folder_id: faker.datatype.uuid(),
-  name: faker.random.word(),
+  owner_id: faker.string.ulid(),
+  id: faker.string.uuid(),
+  description: faker.lorem.sentence(),
+  folder_id: faker.string.uuid(),
+  name: faker.word.words(2),
   is_smart: false,
-  rules: []
+  rules: [],
+  is_collaborative: false,
+  cover: faker.image.url(),
+  permissions: {
+    edit: faker.datatype.boolean(),
+    delete: faker.datatype.boolean(),
+  },
 })
 
-export const states: Record<string, (faker: Faker) => Omit<Partial<Playlist>, 'type'>> = {
-  smart: _ => ({
+export const states: Record<string, () => Omit<Partial<Playlist>, 'type'>> = {
+  smart: () => ({
     is_smart: true,
-    rules: [
-      factory<SmartPlaylistRuleGroup>('smart-playlist-rule-group')
-    ]
+    rules: [factory('smart-playlist-rule-group').make() as SmartPlaylistRuleGroup],
   }),
-  orphan: _ => ({
-    folder_id: null
-  })
+  orphan: () => ({
+    folder_id: null,
+  }),
 }

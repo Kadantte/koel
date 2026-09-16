@@ -3,27 +3,64 @@
 namespace App\Http\Resources;
 
 use App\Models\Playlist;
+use App\Services\Playlist\PlaylistFolderService;
+use App\Services\Playlist\PlaylistService;
+use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
 class PlaylistResource extends JsonResource
 {
-    public function __construct(private Playlist $playlist)
-    {
+    public const array JSON_STRUCTURE = [
+        'type',
+        'id',
+        'name',
+        'description',
+        'folder_id',
+        'user_id',
+        'is_smart',
+        'rules',
+        'created_at',
+        'permissions' => [
+            'edit',
+            'delete',
+        ],
+    ];
+
+    public function __construct(
+        private readonly Playlist $playlist,
+    ) {
         parent::__construct($playlist);
     }
 
-    /** @return array<mixed> */
-    public function toArray($request): array
+    /** @inheritdoc */
+    public function toArray(Request $request): array
     {
+        $user = $request->user() ?? $this->playlist->owner;
+        $embedding = $request->routeIs('embeds.payload');
+
+        /** @var PlaylistService $playlistService */
+        $playlistService = app(PlaylistService::class);
+
+        /** @var PlaylistFolderService $folderService */
+        $folderService = app(PlaylistFolderService::class);
+
         return [
             'type' => 'playlists',
             'id' => $this->playlist->id,
             'name' => $this->playlist->name,
-            'folder_id' => $this->playlist->folder_id,
-            'user_id' => $this->playlist->user_id,
-            'is_smart' => $this->playlist->is_smart,
-            'rules' => $this->playlist->rules,
-            'created_at' => $this->playlist->created_at,
+            'description' => $this->playlist->description,
+            'folder_id' => $this->unless($embedding, $folderService->getFolderForPlaylist($this->playlist, $user)?->id),
+            'user_id' => $this->unless($embedding, $this->playlist->owner->public_id), // backwards compatibility
+            'owner_id' => $this->unless($embedding, $this->playlist->owner->public_id),
+            'is_smart' => $this->unless($embedding, $this->playlist->is_smart),
+            'is_collaborative' => $this->unless($embedding, $playlistService->isPlaylistCollaborative($this->playlist)),
+            'rules' => $this->unless($embedding, $this->playlist->rules),
+            'cover' => image_storage_url($this->playlist->cover),
+            'created_at' => $this->unless($embedding, $this->playlist->created_at),
+            'permissions' => $this->unless($embedding, fn () => [
+                'edit' => $user->can('edit', $this->playlist),
+                'delete' => $user->can('delete', $this->playlist),
+            ]),
         ];
     }
 }

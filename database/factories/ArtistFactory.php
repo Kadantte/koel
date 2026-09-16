@@ -2,19 +2,21 @@
 
 namespace Database\Factories;
 
+use App\Helpers\Ulid;
 use App\Models\Artist;
+use App\Models\User;
 use Illuminate\Database\Eloquent\Factories\Factory;
 
+/** @extends Factory<Artist> */
 class ArtistFactory extends Factory
 {
-    protected $model = Artist::class;
-
-    /** @return array<mixed> */
+    /** @inheritdoc */
     public function definition(): array
     {
         return [
-            'name' => $this->faker->name,
-            'image' => md5(uniqid()) . '.jpg',
+            'user_id' => User::factory(),
+            'name' => fake()->name,
+            'image' => Ulid::generate() . '.jpg',
         ];
     }
 }

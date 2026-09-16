@@ -1,24 +1,19 @@
 {
   "compilerOptions": {
-    "baseUrl": ".",
-    "target": "es2021",
-    "lib": ["es2021", "dom", "dom.iterable"],
+    "target": "es2022",
+    "lib": ["es2022", "es2023.array", "dom", "dom.iterable"],
     "jsx": "preserve",
     "strict": true,
     "noImplicitAny": false,
     "module": "esnext",
-    "moduleResolution": "node",
+    "moduleResolution": "bundler",
     "experimentalDecorators": true,
     "esModuleInterop": true,
     "allowJs": true,
     "paths": {
-      "@/*": ["js/*"]
+      "@/*": ["./js/*"]
     }
   },
-  "include": [
-    "js/**/*"
-  ],
-  "exclude": [
-    "js/__tests__/**/*"
-  ]
+  "include": ["js/**/*", "../../node_modules/vitest/globals.d.ts"],
+  "exclude": []
 }

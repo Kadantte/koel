@@ -2,11 +2,12 @@
 
 namespace App\Values;
 
-final class LastfmLoveTrackParameters
+final readonly class LastfmLoveTrackParameters
 {
-    private function __construct(public string $trackName, public string $artistName)
-    {
-    }
+    private function __construct(
+        public string $trackName,
+        public string $artistName,
+    ) {}
 
     public static function make(string $trackName, string $artistName): self
     {

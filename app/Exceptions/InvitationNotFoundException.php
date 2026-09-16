@@ -2,8 +2,6 @@
 
 namespace App\Exceptions;
 
-use Exception;
+use RuntimeException;
 
-class InvitationNotFoundException extends Exception
-{
-}
+class InvitationNotFoundException extends RuntimeException {}

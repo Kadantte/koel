@@ -5,16 +5,15 @@ namespace Database\Factories;
 use App\Models\Setting;
 use Illuminate\Database\Eloquent\Factories\Factory;
 
+/** @extends Factory<Setting> */
 class SettingFactory extends Factory
 {
-    protected $model = Setting::class;
-
-    /** @return array<mixed> */
+    /** @inheritdoc */
     public function definition(): array
     {
         return [
-            'key' => $this->faker->slug,
-            'value' => $this->faker->name,
+            'key' => fake()->slug,
+            'value' => fake()->name,
         ];
     }
 }

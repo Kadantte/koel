@@ -1,9 +1,42 @@
-import { arrayify, logger, pluralize } from '@/utils'
-import { albumStore, artistStore, playlistFolderStore, playlistStore, songStore } from '@/stores'
+import { ref } from 'vue'
+import { pluralize } from '@/utils/formatters'
+import { arrayify, getPlayableProp } from '@/utils/helpers'
+import { logger } from '@/utils/logger'
+import { albumStore } from '@/stores/albumStore'
+import { artistStore } from '@/stores/artistStore'
+import { playlistStore } from '@/stores/playlistStore'
+import { playlistFolderStore } from '@/stores/playlistFolderStore'
+import { playableStore } from '@/stores/playableStore'
+import { mediaBrowser } from '@/services/mediaBrowser'
 
-type Draggable = Song | Song[] | Album | Artist | Playlist | PlaylistFolder
-const draggableTypes = <const>['songs', 'album', 'artist', 'playlist', 'playlist-folder']
-type DraggableType = typeof draggableTypes[number]
+type Draggable = MaybeArray<Playable> | Album | Artist | Genre | Playlist | PlaylistFolder | MaybeArray<Song | Folder>
+const draggableTypes = <const>['playables', 'album', 'artist', 'genre', 'playlist', 'playlist-folder', 'browser-media']
+type DraggableType = (typeof draggableTypes)[number]
+
+export const currentDragType = ref<DraggableType | null>(null)
+
+const clearDragState = () => (currentDragType.value = null)
+
+document.addEventListener('dragend', clearDragState)
+document.addEventListener('drop', clearDragState, true)
+
+// Empty text hides the ghost — used when the hover target would no-op.
+export const setDragText = (text: string): void => {
+  const ghost = document.querySelector<HTMLElement>('#dragGhost')
+  if (!ghost) {
+    return
+  }
+
+  ghost.textContent = text
+  ghost.style.display = text ? 'block' : 'none'
+}
+
+// A transparent 1x1 image used to suppress the browser's default drag ghost.
+const emptyDragImage = (() => {
+  const img = new Image()
+  img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'
+  return img
+})()
 
 const createGhostDragImage = (event: DragEvent, text: string): void => {
   if (!event.dataTransfer) {
@@ -13,14 +46,56 @@ const createGhostDragImage = (event: DragEvent, text: string): void => {
   let dragGhost = document.querySelector<HTMLElement>('#dragGhost')
 
   if (!dragGhost) {
-    // Create the element to be the ghost drag image.
     dragGhost = document.createElement('div')
     dragGhost.id = 'dragGhost'
+    dragGhost.setAttribute('aria-hidden', 'true')
     document.body.appendChild(dragGhost)
   }
 
-  dragGhost.innerText = text
-  event.dataTransfer.setDragImage(dragGhost, 0, 0)
+  dragGhost.textContent = text
+
+  // Use a transparent image as the native drag ghost to avoid browser rendering artifacts.
+  // The real ghost is a custom DOM element that follows the cursor via the 'drag' event.
+  event.dataTransfer.setDragImage(emptyDragImage, 0, 0)
+
+  dragGhost.style.display = 'block'
+
+  let rafId: number | null = null
+
+  const cleanup = () => {
+    dragGhost!.style.display = 'none'
+
+    if (rafId !== null) {
+      cancelAnimationFrame(rafId)
+      rafId = null
+    }
+
+    document.removeEventListener('drag', onDrag)
+    document.removeEventListener('dragend', cleanup)
+    document.removeEventListener('drop', cleanup, true)
+  }
+
+  const onDrag = (e: DragEvent) => {
+    if (e.clientX === 0 && e.clientY === 0) {
+      // Browser sends (0,0) as the final drag event — hide the ghost immediately.
+      cleanup()
+      return
+    }
+
+    if (rafId !== null) {
+      cancelAnimationFrame(rafId)
+    }
+
+    rafId = requestAnimationFrame(() => {
+      dragGhost!.style.left = `${e.clientX}px`
+      dragGhost!.style.top = `${e.clientY}px`
+      rafId = null
+    })
+  }
+
+  document.addEventListener('drag', onDrag)
+  document.addEventListener('dragend', cleanup)
+  document.addEventListener('drop', cleanup, true)
 }
 
 const getDragType = (event: DragEvent) => {
@@ -33,15 +108,19 @@ export const useDraggable = (type: DraggableType) => {
       return
     }
 
+    currentDragType.value = type
     event.dataTransfer.effectAllowed = 'copyMove'
 
     let text: string
     let data: any
 
     switch (type) {
-      case 'songs':
-        dragged = arrayify(<Song>dragged)
-        text = dragged.length === 1 ? `${dragged[0].title} by ${dragged[0].artist_name}` : pluralize(dragged, 'song')
+      case 'playables':
+        dragged = arrayify(<Playable>dragged)
+        text =
+          dragged.length === 1
+            ? `${dragged[0].title} by ${getPlayableProp(dragged[0], 'artist_name', 'podcast_author')}`
+            : pluralize(dragged, 'item')
 
         data = dragged.map(song => song.id)
         break
@@ -70,6 +149,18 @@ export const useDraggable = (type: DraggableType) => {
         data = dragged.id
         break
 
+      case 'browser-media':
+        dragged = arrayify(dragged as MaybeArray<Song | Folder>)
+        data = mediaBrowser.extractMediaReferences(dragged)
+        text = pluralize(dragged, 'item')
+        break
+
+      case 'genre':
+        dragged = <Genre>dragged
+        data = dragged.id
+        text = dragged.name || 'No Genre'
+        break
+
       default:
         return
     }
@@ -80,7 +171,7 @@ export const useDraggable = (type: DraggableType) => {
   }
 
   return {
-    startDragging
+    startDragging,
   }
 }
 
@@ -93,55 +184,71 @@ export const useDroppable = (acceptedTypes: DraggableType[]) => {
   const getDroppedData = (event: DragEvent) => {
     const type = getDragType(event)
 
-    if (!type) return null
+    if (!type) {
+      return null
+    }
 
     try {
-      return JSON.parse(event.dataTransfer?.getData(`application/x-koel.${type}`)!)
-    } catch (e) {
-      logger.warn('Failed to parse dropped data', e)
+      return JSON.parse(event.dataTransfer!.getData(`application/x-koel.${type}`)!)
+    } catch (error: unknown) {
+      logger.warn('Failed to parse dropped data', error)
       return null
     }
   }
 
-  const resolveDroppedValue = async <T = Playlist> (event: DragEvent): Promise<T | undefined> => {
+  const resolveDroppedValue = async <T = Playlist>(event: DragEvent): Promise<T | undefined> => {
     try {
       switch (getDragType(event)) {
         case 'playlist':
-          return playlistStore
-            .byId(parseInt(event.dataTransfer!.getData('application/x-koel.playlist'))) as T | undefined
+          const id = String(JSON.parse(event.dataTransfer!.getData('application/x-koel.playlist')))
+          return playlistStore.byId(id) as T | undefined
+        case 'playlist-folder':
+          const folderId = String(JSON.parse(event.dataTransfer!.getData('application/x-koel.playlist-folder')))
+          return playlistFolderStore.byId(folderId) as T | undefined
         default:
-          return
+          return undefined
       }
-    } catch (error) {
+    } catch (error: unknown) {
       logger.error(error, event)
+      return undefined
     }
   }
 
-  const resolveDroppedSongs = async (event: DragEvent) => {
+  const resolveDroppedItems = async (event: DragEvent) => {
     try {
       const type = getDragType(event)
-      if (!type) return <Song[]>[]
+
+      if (!type) {
+        return <Playable[]>[]
+      }
 
       const data = getDroppedData(event)
+
       switch (type) {
-        case 'songs':
-          return songStore.byIds(<string[]>data)
+        case 'playables':
+          return playableStore.byIds(<string[]>data)
         case 'album':
-          const album = await albumStore.resolve(<number>data)
-          return album ? await songStore.fetchForAlbum(album) : <Song[]>[]
+          const album = await albumStore.resolve(data)
+          return album ? await playableStore.fetchSongsForAlbum(album) : <Song[]>[]
         case 'artist':
-          const artist = await artistStore.resolve(<number>data)
-          return artist ? await songStore.fetchForArtist(artist) : <Song[]>[]
+          const artist = await artistStore.resolve(data)
+          return artist ? await playableStore.fetchSongsForArtist(artist) : <Song[]>[]
         case 'playlist':
-          const playlist = playlistStore.byId(<number>data)
-          return playlist ? await songStore.fetchForPlaylist(playlist) : <Song[]>[]
+          const playlist = playlistStore.byId(<string>data)
+          return playlist ? await playableStore.fetchForPlaylist(playlist) : <Song[]>[]
         case 'playlist-folder':
           const folder = playlistFolderStore.byId(<string>data)
-          return folder ? await songStore.fetchForPlaylistFolder(folder) : <Song[]>[]
+          return folder
+            ? await playableStore.fetchForPlaylists(playlistFolderStore.playlistsInTree(folder))
+            : <Song[]>[]
+        case 'browser-media':
+          return await playableStore.resolveSongsFromMediaReferences(data)
+        case 'genre':
+          return await playableStore.fetchSongsByGenre(<string>data)
         default:
           throw new Error(`Unknown drag type: ${type}`)
       }
-    } catch (error) {
+    } catch (error: unknown) {
       logger.error(error, event)
       return <Song[]>[]
     }
@@ -151,6 +258,6 @@ export const useDroppable = (acceptedTypes: DraggableType[]) => {
     acceptsDrop,
     getDroppedData,
     resolveDroppedValue,
-    resolveDroppedSongs
+    resolveDroppedItems,
   }
 }

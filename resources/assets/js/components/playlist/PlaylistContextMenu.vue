@@ -1,53 +1,167 @@
 <template>
-  <ContextMenuBase ref="base">
-    <li @click="play">Play</li>
-    <li @click="shuffle">Shuffle</li>
-    <li class="separator" />
-    <li @click="edit">Edit…</li>
-    <li @click="destroy">Delete</li>
-  </ContextMenuBase>
+  <ul>
+    <MenuItem @click="play">Play</MenuItem>
+    <MenuItem @click="shuffle">Shuffle</MenuItem>
+    <MenuItem @click="addToQueue">Add to Queue</MenuItem>
+    <MenuItem v-if="canShare">
+      Share
+      <template #subMenuItems>
+        <MenuItem v-if="allowEmbedding" @click="showEmbedModal">Embed…</MenuItem>
+        <MenuItem v-if="canShowCollaboration" @click="showCollaborationModal">Collaborate…</MenuItem>
+      </template>
+    </MenuItem>
+    <template v-if="allowDownload">
+      <Separator />
+      <MenuItem @click="download">Download</MenuItem>
+    </template>
+    <template v-if="canToggleOffline">
+      <Separator />
+      <MenuItem @click="toggleOffline">{{ allCached ? 'Remove Offline Versions' : 'Make Available Offline' }}</MenuItem>
+    </template>
+    <template v-if="canMoveOutOfFolder">
+      <Separator />
+      <MenuItem @click="moveOutOfFolder">Move Out of Folder</MenuItem>
+    </template>
+    <template v-if="canEditPlaylist || canDeletePlaylist">
+      <Separator />
+      <MenuItem v-if="canEditPlaylist" @click="edit">Edit…</MenuItem>
+      <MenuItem v-if="canDeletePlaylist" @click="destroy">Delete</MenuItem>
+    </template>
+  </ul>
 </template>
 
 <script lang="ts" setup>
-import { ref } from 'vue'
-import { eventBus } from '@/utils'
-import { useContextMenu, useMessageToaster, useRouter } from '@/composables'
-import { playbackService } from '@/services'
-import { songStore } from '@/stores'
+import { computed, onMounted, ref, toRef, toRefs } from 'vue'
+import { eventBus } from '@/utils/eventBus'
+import { defineAsyncComponent } from '@/utils/helpers'
+import { pluralize } from '@/utils/formatters'
+import { useRouter } from '@/composables/useRouter'
+import { useContextMenu } from '@/composables/useContextMenu'
+import { useModal } from '@/composables/useModal'
+import { useMessageToaster } from '@/composables/useMessageToaster'
+import { useOfflinePlayback } from '@/composables/useOfflinePlayback'
+import { usePolicies } from '@/composables/usePolicies'
+import { useKoelPlus } from '@/composables/useKoelPlus'
+import { queueStore } from '@/stores/queueStore'
+import { playableStore } from '@/stores/playableStore'
+import { playback } from '@/services/playbackManager'
+import { playlistFolderStore } from '@/stores/playlistFolderStore'
+import { playlistStore } from '@/stores/playlistStore'
+import { useDialogBox } from '@/composables/useDialogBox'
+import { commonStore } from '@/stores/commonStore'
+import { useDownload } from '@/composables/useDownload'
 
-const { base, ContextMenuBase, open, trigger } = useContextMenu()
-const { go } = useRouter()
-const { toastWarning } = useMessageToaster()
+const props = defineProps<{ playlist: Playlist }>()
+const { playlist } = toRefs(props)
 
-const playlist = ref<Playlist>()
+const EditPlaylistForm = defineAsyncComponent(() => import('@/components/playlist/EditPlaylistForm.vue'))
+const EditSmartPlaylistForm = defineAsyncComponent(
+  () => import('@/components/playlist/smart-playlist/EditSmartPlaylistForm.vue'),
+)
+const PlaylistCollaborationModal = defineAsyncComponent(
+  () => import('@/components/playlist/PlaylistCollaborationModal.vue'),
+)
+const CreateEmbedForm = defineAsyncComponent(() => import('@/components/embed/CreateEmbedForm.vue'))
 
-const edit = () => trigger(() => eventBus.emit('MODAL_SHOW_EDIT_PLAYLIST_FORM', playlist.value!))
-const destroy = () => trigger(() => eventBus.emit('PLAYLIST_DELETE', playlist.value!))
+const { MenuItem, Separator, trigger } = useContextMenu()
+const { openModal } = useModal()
+const { go, url } = useRouter()
+const { toastWarning, toastSuccess } = useMessageToaster()
+const { isPlus } = useKoelPlus()
+const { currentUserCan } = usePolicies()
+const { showConfirmDialog } = useDialogBox()
 
-const play = () => trigger(async () => {
-  const songs = await songStore.fetchForPlaylist(playlist.value!)
+const allowDownload = toRef(commonStore.state, 'allows_download')
+const allowEmbedding = toRef(commonStore.state, 'allows_embedding')
 
-  if (songs.length) {
-    playbackService.queueAndPlay(songs)
-    go('queue')
-  } else {
-    toastWarning('The playlist is empty.')
-  }
-})
+const canEditPlaylist = computed(() => currentUserCan.editPlaylist(playlist.value))
+const canDeletePlaylist = computed(() => currentUserCan.deletePlaylist(playlist.value))
+const canMoveOutOfFolder = computed(() => playlist.value.folder_id !== null && canEditPlaylist.value)
+const canShowCollaboration = computed(() => isPlus.value && !playlist.value?.is_smart)
+const canShare = computed(() => allowEmbedding.value || canShowCollaboration.value)
 
-const shuffle = () => trigger(async () => {
-  const songs = await songStore.fetchForPlaylist(playlist.value!)
+const edit = () =>
+  trigger(() => {
+    const p = playlist.value
+    p.is_smart
+      ? openModal<'EDIT_SMART_PLAYLIST_FORM'>(EditSmartPlaylistForm, { playlist: p })
+      : openModal<'EDIT_PLAYLIST_FORM'>(EditPlaylistForm, { playlist: p })
+  })
 
-  if (songs.length) {
-    playbackService.queueAndPlay(songs, true)
-    go('queue')
-  } else {
-    toastWarning('The playlist is empty.')
-  }
-})
+const destroy = () =>
+  trigger(async () => {
+    if (await showConfirmDialog(`Delete the playlist "${playlist.value.name}"?`)) {
+      await playlistStore.delete(playlist.value)
+      toastSuccess(`Playlist "${playlist.value.name}" deleted.`)
+      eventBus.emit('PLAYLIST_DELETED', playlist.value)
+    }
+  })
 
-eventBus.on('PLAYLIST_CONTEXT_MENU_REQUESTED', async (event, _playlist) => {
-  playlist.value = _playlist
-  await open(event.pageY, event.pageX)
+const { fromPlaylist } = useDownload()
+const download = () => trigger(() => fromPlaylist(playlist.value))
+
+const play = () =>
+  trigger(async () => {
+    const songs = await playableStore.fetchForPlaylist(playlist.value)
+
+    if (songs.length) {
+      playback().queueAndPlay(songs)
+      go(url('queue'))
+    } else {
+      toastWarning('The playlist is empty.')
+    }
+  })
+
+const shuffle = () =>
+  trigger(async () => {
+    const songs = await playableStore.fetchForPlaylist(playlist.value)
+
+    if (songs.length) {
+      playback().queueAndPlay(songs, true)
+      go(url('queue'))
+    } else {
+      toastWarning('The playlist is empty.')
+    }
+  })
+
+const addToQueue = () =>
+  trigger(async () => {
+    const songs = await playableStore.fetchForPlaylist(playlist.value)
+
+    if (songs.length) {
+      queueStore.queueAfterCurrent(songs)
+      toastSuccess('Playlist added to queue.')
+    } else {
+      toastWarning('The playlist is empty.')
+    }
+  })
+
+const moveOutOfFolder = () => trigger(() => playlistFolderStore.movePlaylistToFolder(playlist.value, null))
+
+const showCollaborationModal = () =>
+  trigger(() => openModal<'PLAYLIST_COLLABORATION'>(PlaylistCollaborationModal, { playlist: playlist.value }))
+const showEmbedModal = () =>
+  trigger(() => openModal<'CREATE_EMBED_FORM'>(CreateEmbedForm, { embeddable: playlist.value }))
+
+const { swReady, makePlayablesAvailableOffline, removePlayablesOfflineCache, allPlayablesCached } = useOfflinePlayback()
+const canToggleOffline = computed(() => swReady.value)
+const playlistSongs = ref<Playable[]>([])
+const allCached = computed(() => allPlayablesCached(playlistSongs.value))
+
+const toggleOffline = () =>
+  trigger(async () => {
+    if (!playlistSongs.value.length) return
+
+    if (allCached.value) {
+      removePlayablesOfflineCache(playlistSongs.value)
+      toastSuccess(`Removed offline versions for "${playlist.value.name}".`)
+    } else {
+      makePlayablesAvailableOffline(playlistSongs.value)
+      toastSuccess(`Making ${pluralize(playlistSongs.value, 'song')} available offline…`)
+    }
+  })
+
+onMounted(async () => {
+  playlistSongs.value = await playableStore.fetchForPlaylist(playlist.value)
 })
 </script>

@@ -2,39 +2,34 @@
 
 namespace Tests\Feature;
 
-use App\Events\LibraryChanged;
 use App\Exceptions\MediaPathNotSetException;
 use App\Exceptions\SongUploadFailedException;
 use App\Models\Setting;
-use App\Models\Song;
-use App\Models\User;
-use App\Services\UploadService;
 use Illuminate\Http\Response;
 use Illuminate\Http\UploadedFile;
-use Illuminate\Support\Facades\Event;
-use Mockery\MockInterface;
+use PHPUnit\Framework\Attributes\Test;
+use Tests\TestCase;
+
+use function Tests\create_admin;
+use function Tests\create_user;
+use function Tests\sandbox_path;
+use function Tests\test_path;
 
 class UploadTest extends TestCase
 {
-    private UploadService|MockInterface $uploadService;
     private UploadedFile $file;
 
     public function setUp(): void
     {
         parent::setUp();
 
-        $this->uploadService = self::mock(UploadService::class);
-        $this->file = UploadedFile::fake()
-            ->createWithContent('song.mp3', file_get_contents(__DIR__ . '/../songs/full.mp3'));
+        $this->file = UploadedFile::fromFile(test_path('songs/full.mp3'), 'song.mp3'); //@phpstan-ignore-line
     }
 
-    public function testUnauthorizedPost(): void
+    #[Test]
+    public function unauthorizedPost(): void
     {
-        Setting::set('media_path', '/media/koel');
-
-        $this->uploadService
-            ->shouldReceive('handleUploadedFile')
-            ->never();
+        Setting::set('media_path', '');
 
         $this->postAs('/api/upload', ['file' => $this->file])->assertForbidden();
     }
@@ -43,44 +38,37 @@ class UploadTest extends TestCase
     public function provideUploadExceptions(): array
     {
         return [
-            [MediaPathNotSetException::class, Response::HTTP_FORBIDDEN],
+            [MediaPathNotSetException::class,  Response::HTTP_FORBIDDEN],
             [SongUploadFailedException::class, Response::HTTP_BAD_REQUEST],
         ];
     }
 
-    /** @dataProvider provideUploadExceptions */
-    public function testPostShouldFail(string $exceptionClass, int $statusCode): void
+    #[Test]
+    public function uploadFailsIfMediaPathIsNotSet(): void
     {
-        /** @var User $admin */
-        $admin = User::factory()->admin()->create();
+        Setting::set('media_path', '');
 
-        $this->uploadService
-            ->shouldReceive('handleUploadedFile')
-            ->once()
-            ->with($this->file)
-            ->andThrow($exceptionClass);
-
-        $this->postAs('/api/upload', ['file' => $this->file], $admin)->assertStatus($statusCode);
+        $this->postAs('/api/upload', ['file' => $this->file], create_admin())->assertForbidden();
     }
 
-    public function testPost(): void
+    #[Test]
+    public function uploadSuccessful(): void
     {
-        Event::fake(LibraryChanged::class);
-        Setting::set('media_path', '/media/koel');
+        Setting::set('media_path', sandbox_path('media'));
 
-        /** @var Song $song */
-        $song = Song::factory()->create();
+        $this->postAs('/api/upload', ['file' => $this->file], create_admin())->assertJsonStructure(['song', 'album']);
+    }
 
-        /** @var User $admin */
-        $admin = User::factory()->admin()->create();
+    #[Test]
+    public function uploadDisabledInDemoMode(): void
+    {
+        config(['koel.misc.demo' => true]);
+        Setting::set('media_path', sandbox_path('media'));
 
-        $this->uploadService
-            ->shouldReceive('handleUploadedFile')
-            ->once()
-            ->with($this->file)
-            ->andReturn($song);
-
-        $this->postAs('/api/upload', ['file' => $this->file], $admin)->assertJsonStructure(['song', 'album']);
-        Event::assertDispatched(LibraryChanged::class);
+        try {
+            $this->postAs('/api/upload', ['file' => $this->file], create_user())->assertForbidden();
+        } finally {
+            config(['koel.misc.demo' => false]);
+        }
     }
 }

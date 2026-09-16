@@ -4,14 +4,19 @@ namespace Tests\Feature;
 
 use App\Models\Album;
 use App\Models\Artist;
-use App\Models\Playlist;
+use App\Models\Favorite;
 use App\Models\Song;
-use App\Models\User;
-use App\Repositories\InteractionRepository;
 use App\Services\DownloadService;
-use Illuminate\Support\Collection;
+use App\Values\Downloadable;
+use Illuminate\Database\Eloquent\Collection;
 use Mockery;
 use Mockery\MockInterface;
+use PHPUnit\Framework\Attributes\Test;
+use Tests\TestCase;
+
+use function Tests\create_playlist;
+use function Tests\create_user;
+use function Tests\test_path;
 
 class DownloadTest extends TestCase
 {
@@ -21,161 +26,150 @@ class DownloadTest extends TestCase
     {
         parent::setUp();
 
-        static::createSampleMediaSet();
-        $this->downloadService = self::mock(DownloadService::class);
+        $this->downloadService = $this->mock(DownloadService::class);
     }
 
-    public function testNonLoggedInUserCannotDownload(): void
+    #[Test]
+    public function nonLoggedInUserCannotDownload(): void
     {
-        /** @var Song $song */
-        $song = Song::query()->first();
+        $this->downloadService->shouldNotReceive('getDownloadable');
 
-        $this->downloadService
-            ->shouldReceive('from')
-            ->never();
-
-        $this->get("download/songs?songs[]=$song->id")
-            ->assertUnauthorized();
+        $this->get('download/songs?songs[]=' . Song::factory()->createOne()->id)->assertUnauthorized();
     }
 
-    public function testDownloadOneSong(): void
+    #[Test]
+    public function downloadOneSong(): void
     {
-        /** @var Song $song */
-        $song = Song::query()->first();
-
-        /** @var User $user */
-        $user = User::factory()->create();
+        $song = Song::factory()->createOne();
+        $user = create_user();
 
         $this->downloadService
-            ->shouldReceive('from')
-            ->once()
+            ->expects('getDownloadable')
             ->with(Mockery::on(static function (Collection $retrievedSongs) use ($song) {
-                return $retrievedSongs->count() === 1 && $retrievedSongs->first()->id === $song->id;
+                return $retrievedSongs->count() === 1 && $retrievedSongs->first()->is($song);
             }))
-            ->andReturn($this->mediaPath . '/blank.mp3');
+            ->andReturn(Downloadable::make(test_path('songs/blank.mp3')));
 
-        $this->get("download/songs?songs[]={$song->id}&api_token=" . $user->createToken('Koel')->plainTextToken)
-            ->assertOk();
+        $this->get(
+            "download/songs?songs[]={$song->id}&api_token=" . $user->createToken('Koel')->plainTextToken,
+        )->assertOk();
     }
 
-    public function testDownloadMultipleSongs(): void
+    #[Test]
+    public function downloadMultipleSongs(): void
     {
-        /** @var User $user */
-        $user = User::factory()->create();
-
-        /** @var array<Song>|Collection $songs */
-        $songs = Song::query()->take(2)->orderBy('id')->get();
+        $songs = Song::factory()->createMany(2);
+        $user = create_user();
 
         $this->downloadService
-            ->shouldReceive('from')
-            ->once()
+            ->expects('getDownloadable')
             ->with(Mockery::on(static function (Collection $retrievedSongs) use ($songs): bool {
-                $retrievedIds = $retrievedSongs->pluck('id')->all();
-                $requestedIds = $songs->pluck('id')->all();
-                self::assertEqualsCanonicalizing($requestedIds, $retrievedIds);
+                self::assertEqualsCanonicalizing($retrievedSongs->modelKeys(), $songs->modelKeys());
 
                 return true;
             }))
-            ->andReturn($this->mediaPath . '/blank.mp3'); // should be a zip file, but we're testing here…
+            // should be a zip file, but we're testing here…
+            ->andReturn(Downloadable::make(test_path('songs/blank.mp3')));
 
         $this->get(
             "download/songs?songs[]={$songs[0]->id}&songs[]={$songs[1]->id}&api_token="
-            . $user->createToken('Koel')->plainTextToken
-        )
-            ->assertOk();
+            . $user->createToken('Koel')->plainTextToken,
+        )->assertOk();
     }
 
-    public function testDownloadAlbum(): void
+    #[Test]
+    public function downloadAlbum(): void
     {
-        /** @var Album $album */
-        $album = Album::query()->first();
-
-        /** @var User $user */
-        $user = User::factory()->create();
+        $album = Album::factory()->createOne();
+        $songs = Song::factory()->for($album)->createMany(2);
+        $user = create_user();
 
         $this->downloadService
-            ->shouldReceive('from')
-            ->once()
-            ->with(Mockery::on(static function (Album $retrievedAlbum) use ($album): bool {
-                return $retrievedAlbum->id === $album->id;
+            ->expects('getDownloadable')
+            ->with(Mockery::on(static function (Collection $retrievedSongs) use ($songs): bool {
+                self::assertEqualsCanonicalizing($retrievedSongs->modelKeys(), $songs->modelKeys());
+
+                return true;
             }))
-            ->andReturn($this->mediaPath . '/blank.mp3');
+            ->andReturn(Downloadable::make(test_path('songs/blank.mp3')));
 
-        $this->get("download/album/{$album->id}?api_token=" . $user->createToken('Koel')->plainTextToken)
-            ->assertOk();
+        $this->get("download/album/{$album->id}?api_token=" . $user->createToken('Koel')->plainTextToken)->assertOk();
     }
 
-    public function testDownloadArtist(): void
+    #[Test]
+    public function downloadArtist(): void
     {
-        /** @var Artist $artist */
-        $artist = Artist::query()->first();
-
-        /** @var User $user */
-        $user = User::factory()->create();
+        $artist = Artist::factory()->createOne();
+        $songs = Song::factory()->for($artist)->createMany(2);
+        $user = create_user();
 
         $this->downloadService
-            ->shouldReceive('from')
-            ->once()
-            ->with(Mockery::on(static function (Artist $retrievedArtist) use ($artist): bool {
-                return $retrievedArtist->id === $artist->id;
+            ->expects('getDownloadable')
+            ->with(Mockery::on(static function (Collection $retrievedSongs) use ($songs): bool {
+                self::assertEqualsCanonicalizing($retrievedSongs->modelKeys(), $songs->modelKeys());
+
+                return true;
             }))
-            ->andReturn($this->mediaPath . '/blank.mp3');
+            ->andReturn(Downloadable::make(test_path('songs/blank.mp3')));
 
-        $this->get("download/artist/{$artist->id}?api_token=" . $user->createToken('Koel')->plainTextToken)
-            ->assertOk();
+        $this->get("download/artist/{$artist->id}?api_token=" . $user->createToken('Koel')->plainTextToken)->assertOk();
     }
 
-    public function testDownloadPlaylist(): void
+    #[Test]
+    public function downloadPlaylist(): void
     {
-        /** @var User $user */
-        $user = User::factory()->create();
+        $songs = Song::factory()->createMany(2);
 
-        /** @var Playlist $playlist */
-        $playlist = Playlist::factory()->for($user)->create();
+        $playlist = create_playlist();
+        $playlist->playables()->attach($songs, ['user_id' => $playlist->owner->id]);
 
         $this->downloadService
-            ->shouldReceive('from')
-            ->with(Mockery::on(static function (Playlist $retrievedPlaylist) use ($playlist): bool {
-                return $retrievedPlaylist->id === $playlist->id;
+            ->expects('getDownloadable')
+            ->with(Mockery::on(static function (Collection $retrievedSongs) use ($songs): bool {
+                self::assertEqualsCanonicalizing($retrievedSongs->modelKeys(), $songs->modelKeys());
+
+                return true;
             }))
-            ->once()
-            ->andReturn($this->mediaPath . '/blank.mp3');
+            ->andReturn(Downloadable::make(test_path('songs/blank.mp3')));
 
-        $this->get("download/playlist/{$playlist->id}?api_token=" . $user->createToken('Koel')->plainTextToken)
-            ->assertOk();
+        $this->get(
+            "download/playlist/{$playlist->id}?api_token=" . $playlist->owner->createToken('Koel')->plainTextToken,
+        )->assertOk();
     }
 
-    public function testNonOwnerCannotDownloadPlaylist(): void
+    #[Test]
+    public function nonOwnerCannotDownloadPlaylist(): void
     {
-        /** @var Playlist $playlist */
-        $playlist = Playlist::factory()->create();
+        $playlist = create_playlist();
 
-        /** @var User $user */
-        $user = User::factory()->create();
-
-        $this->get("download/playlist/{$playlist->id}?api_token=" . $user->createToken('Koel')->plainTextToken)
-            ->assertForbidden();
+        $this->get(
+            "download/playlist/{$playlist->id}?api_token=" . create_user()->createToken('Koel')->plainTextToken,
+        )->assertForbidden();
     }
 
-    public function testDownloadFavorites(): void
+    #[Test]
+    public function downloadFavorites(): void
     {
-        /** @var User $user */
-        $user = User::factory()->create();
-        $favorites = Collection::make();
+        $user = create_user();
 
-        self::mock(InteractionRepository::class)
-            ->shouldReceive('getUserFavorites')
-            ->once()
-            ->with(Mockery::on(static fn (User $retrievedUser) => $retrievedUser->is($user)))
-            ->andReturn($favorites);
+        /** @var Collection<int, Song> $songs */
+        $songs = Song::factory()->for($user, 'owner')->createMany(2);
+
+        $songs->map(static function (Song $song) use ($user): Favorite {
+            return Favorite::factory()->for($user)->createOne([
+                'favoriteable_id' => $song->id,
+            ]);
+        });
 
         $this->downloadService
-            ->shouldReceive('from')
-            ->with($favorites)
-            ->once()
-            ->andReturn($this->mediaPath . '/blank.mp3');
+            ->expects('getDownloadable')
+            ->with(Mockery::on(static function (Collection $input) use ($songs): bool {
+                self::assertEqualsCanonicalizing($input->modelKeys(), $songs->pluck('id')->all());
 
-        $this->get('download/favorites?api_token=' . $user->createToken('Koel')->plainTextToken)
-            ->assertOk();
+                return true;
+            }))
+            ->andReturn(Downloadable::make(test_path('songs/blank.mp3')));
+
+        $this->get('download/favorites?api_token=' . $user->createToken('Koel')->plainTextToken)->assertOk();
     }
 }

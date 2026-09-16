@@ -1,95 +1,136 @@
-import Axios, { AxiosInstance, Method } from 'axios'
+import ky, { HTTPError } from 'ky'
 import NProgress from 'nprogress'
-import { eventBus } from '@/utils'
-import { authService } from '@/services'
+import { authService } from '@/services/authService'
+import { eventBus } from '@/utils/eventBus'
+
+export { HTTPError }
+
+export const isHttpError = (error: unknown): error is HTTPError => error instanceof HTTPError
 
 class Http {
-  client: AxiosInstance
-
+  private client: ReturnType<typeof ky.create>
   private silent = false
 
-  private showLoadingIndicator () {
-    NProgress.start()
+  constructor() {
+    this.client = ky.create({
+      prefixUrl: `${window.KOEL.base_url}api`,
+      headers: {
+        Accept: 'application/json',
+        'X-Api-Version': 'v7',
+      },
+      hooks: {
+        beforeRequest: [
+          request => {
+            this.silent || this.showLoadingIndicator()
+            request.headers.set('Authorization', `Bearer ${authService.getApiToken()}`)
+          },
+        ],
+        afterResponse: [
+          (_request, _options, response) => {
+            this.silent || this.hideLoadingIndicator()
+            this.silent = false
+
+            const token = response.headers.get('authorization')
+            token && authService.setApiToken(token)
+          },
+        ],
+        beforeError: [
+          async error => {
+            this.silent || this.hideLoadingIndicator()
+            this.silent = false
+
+            const { response } = error
+
+            if (response && (response.status === 400 || response.status === 401)) {
+              const method = (error.request?.method || '').toLowerCase()
+
+              let url = ''
+
+              try {
+                url = new URL(error.request?.url || '').pathname
+              } catch {
+                url = error.request?.url || ''
+              }
+
+              const isAuthEntryPoint =
+                method === 'post' &&
+                (url.endsWith('/me') || url.endsWith('/me/two-factor-challenge') || url.endsWith('/me/otp'))
+
+              if (!isAuthEntryPoint) {
+                authService.setRedirect()
+                eventBus.emit('LOG_OUT')
+              }
+            }
+
+            // Attach parsed response data for error handlers
+            try {
+              ;(error as any).responseData = await response?.clone().json()
+            } catch {
+              ;(error as any).responseData = null
+            }
+
+            return error
+          },
+        ],
+      },
+      retry: 0,
+      timeout: false,
+      fetch: (...args: Parameters<typeof fetch>) => fetch(...args),
+    })
   }
 
-  private hideLoadingIndicator () {
-    NProgress.done(true)
+  public get silently() {
+    this.silent = true
+    return this
   }
 
-  public request<T> (method: Method, url: string, data: Record<string, any> = {}, onUploadProgress?: any) {
-    return this.client.request({
-      url,
-      data,
-      method,
-      onUploadProgress
-    }) as Promise<{ data: T }>
+  public async request<T>(method: string, url: string, data: Record<string, any> = {}) {
+    const options: Record<string, any> = {}
+
+    if (method !== 'get' && data) {
+      if (data instanceof FormData) {
+        options.body = data
+      } else {
+        options.json = data
+      }
+    }
+
+    const response = await this.client(url, { method, ...options })
+    const contentType = response.headers.get('content-type')
+    const responseData = contentType?.includes('application/json') ? await response.json() : await response.text()
+
+    return { data: responseData as T }
   }
 
-  public async get<T> (url: string) {
+  public async get<T>(url: string) {
     return (await this.request<T>('get', url)).data
   }
 
-  public async post<T> (url: string, data: Record<string, any>, onUploadProgress?: any) {
-    return (await this.request<T>('post', url, data, onUploadProgress)).data
+  public async post<T>(url: string, data: Record<string, any> = {}) {
+    return (await this.request<T>('post', url, data)).data
   }
 
-  public async put<T> (url: string, data: Record<string, any>) {
+  public async put<T>(url: string, data: Record<string, any>) {
     return (await this.request<T>('put', url, data)).data
   }
 
-  public async delete<T> (url: string, data: Record<string, any> = {}) {
+  public async patch<T>(url: string, data: Record<string, any>) {
+    return (await this.request<T>('patch', url, data)).data
+  }
+
+  public async delete<T>(url: string, data: Record<string, any> = {}) {
     return (await this.request<T>('delete', url, data)).data
   }
 
-  constructor () {
-    this.client = Axios.create({
-      baseURL: `${window.BASE_URL}api`,
-      headers: {
-        'X-Api-Version': 'v6'
-      }
-    })
-
-    // Intercept the request to make sure the token is injected into the header.
-    this.client.interceptors.request.use(config => {
-      this.silent || this.showLoadingIndicator()
-      config.headers.Authorization = `Bearer ${authService.getApiToken()}`
-      return config
-    })
-
-    // Intercept the response and…
-    this.client.interceptors.response.use(response => {
-      this.silent || this.hideLoadingIndicator()
-      this.silent = false
-
-      // …get the tokens from the header or response data if exist, and save them.
-      const token = response.headers.authorization || response.data.token
-      token && authService.setApiToken(token)
-
-      const audioToken = response.data['audio-token']
-      audioToken && authService.setAudioToken(audioToken)
-
-      return response
-    }, error => {
-      this.silent || this.hideLoadingIndicator()
-      this.silent = false
-
-      // Also, if we receive a Bad Request / Unauthorized error
-      if (error.response?.status === 400 || error.response?.status === 401) {
-        // and we're not trying to log in
-        if (!(error.config.method === 'post' && error.config.url === 'me')) {
-          // the token must have expired. Log out.
-          eventBus.emit('LOG_OUT')
-        }
-      }
-
-      return Promise.reject(error)
-    })
+  private showLoadingIndicator() {
+    NProgress.start()
   }
 
-  public get silently () {
-    this.silent = true
-    return this
+  private hideLoadingIndicator() {
+    NProgress.done(true)
   }
 }
 
 export const http = new Http()
+
+export { postWithProgress } from '@/services/httpUpload'

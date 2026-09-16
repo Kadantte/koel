@@ -1,20 +1,23 @@
-import { createApp } from 'vue'
-import { clickaway, focus, hideBrokenIcon, overflowFade, tooltip } from '@/directives'
 import { FontAwesomeIcon, FontAwesomeLayers } from '@fortawesome/vue-fontawesome'
-import { RouterKey } from '@/symbols'
-import { routes } from '@/config'
+import { createApp } from 'vue'
+import { focus } from '@/directives/focus'
+import { tooltip } from '@/directives/tooltip'
+import { hideBrokenIcon } from '@/directives/hideBrokenIcon'
+import { newTab } from '@/directives/newTab'
+import { RouterKey } from '@/config/symbols'
 import Router from '@/router'
+import 'nouislider/distribute/nouislider.min.css'
+import '@/../css/app.pcss'
 import App from './App.vue'
 
 createApp(App)
-  .provide(RouterKey, new Router(routes))
+  .provide(RouterKey, new Router())
   .component('Icon', FontAwesomeIcon)
   .component('IconLayers', FontAwesomeLayers)
   .directive('koel-focus', focus)
-  .directive('koel-clickaway', clickaway)
   .directive('koel-tooltip', tooltip)
   .directive('koel-hide-broken-icon', hideBrokenIcon)
-  .directive('koel-overflow-fade', overflowFade)
+  .directive('koel-new-tab', newTab)
   /**
    * For Ancelot, the ancient cross of war
    * for the holy town of Gods
@@ -23,4 +26,9 @@ createApp(App)
    */
   .mount('#app')
 
-navigator.serviceWorker?.register('./sw.js')
+window.addEventListener('load', () => {
+  navigator.serviceWorker?.register('./sw.js').then(registration => {
+    // Check for SW updates periodically
+    setInterval(() => registration.update(), 60 * 60 * 1000)
+  })
+})

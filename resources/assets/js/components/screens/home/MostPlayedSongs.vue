@@ -1,30 +1,24 @@
 <template>
-  <section>
-    <h1>Most Played</h1>
-    <ol v-if="loading" class="top-song-list">
-      <li v-for="i in 3" :key="i">
-        <SongCardSkeleton />
-      </li>
-    </ol>
+  <HomeScreenBlock>
+    <template #header>Most Played</template>
+    <PlayableCardGridSkeleton v-if="loading" class="-mx-6" role="status" aria-busy="true" aria-label="Loading" />
     <template v-else>
-      <ol v-if="songs.length" class="top-song-list">
-        <li v-for="song in songs" :key="song.id">
-          <SongCard :song="song" />
-        </li>
-      </ol>
-      <p v-else class="text-secondary">You don’t seem to have been playing.</p>
+      <PlayableCardGrid v-if="playables.length" class="-mx-6" :playables />
+      <p v-else>Nothing played as of late.</p>
     </template>
-  </section>
+  </HomeScreenBlock>
 </template>
 
 <script lang="ts" setup>
 import { toRef, toRefs } from 'vue'
-import { overviewStore } from '@/stores'
-import SongCard from '@/components/song/SongCard.vue'
-import SongCardSkeleton from '@/components/ui/skeletons/SongCardSkeleton.vue'
+import { overviewStore } from '@/stores/overviewStore'
+
+import HomeScreenBlock from '@/components/screens/home/HomeScreenBlock.vue'
+import PlayableCardGrid from '@/components/screens/home/PlayableCardGrid.vue'
+import PlayableCardGridSkeleton from '@/components/screens/home/PlayableCardGridSkeleton.vue'
 
 const props = withDefaults(defineProps<{ loading?: boolean }>(), { loading: false })
 const { loading } = toRefs(props)
 
-const songs = toRef(overviewStore.state, 'mostPlayedSongs')
+const playables = toRef(overviewStore.state, 'mostPlayedSongs')
 </script>

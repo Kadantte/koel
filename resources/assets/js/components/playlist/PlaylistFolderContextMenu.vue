@@ -1,65 +1,99 @@
 <template>
-  <ContextMenuBase ref="base">
-    <template v-if="folder">
-      <template v-if="playable">
-        <li @click="play">Play All</li>
-        <li @click="shuffle">Shuffle All</li>
-        <li class="separator" />
-      </template>
-      <li @click="createPlaylist">New Playlist…</li>
-      <li @click="createSmartPlaylist">New Smart Playlist…</li>
-      <li class="separator" />
-      <li @click="rename">Rename</li>
-      <li @click="destroy">Delete</li>
+  <ul>
+    <template v-if="playable">
+      <MenuItem @click="play">Play All</MenuItem>
+      <MenuItem @click="shuffle">Shuffle All</MenuItem>
+      <Separator />
     </template>
-  </ContextMenuBase>
+    <MenuItem>
+      Add
+      <template #subMenuItems>
+        <MenuItem @click="createPlaylist">New Playlist…</MenuItem>
+        <MenuItem @click="createSmartPlaylist">New Smart Playlist…</MenuItem>
+        <MenuItem @click="createFolder">New Folder…</MenuItem>
+      </template>
+    </MenuItem>
+    <Separator />
+    <MenuItem @click="edit">Edit…</MenuItem>
+    <MenuItem @click="destroy">Delete</MenuItem>
+  </ul>
 </template>
 
 <script lang="ts" setup>
-import { computed, ref } from 'vue'
-import { eventBus } from '@/utils'
-import { playlistStore, songStore } from '@/stores'
-import { playbackService } from '@/services'
-import { useContextMenu, useMessageToaster, useRouter } from '@/composables'
+import { computed, toRefs } from 'vue'
+import { defineAsyncComponent } from '@/utils/helpers'
+import { useRouter } from '@/composables/useRouter'
+import { useContextMenu } from '@/composables/useContextMenu'
+import { useModal } from '@/composables/useModal'
+import { useMessageToaster } from '@/composables/useMessageToaster'
+import { playableStore } from '@/stores/playableStore'
+import { playback } from '@/services/playbackManager'
+import { playlistFolderStore } from '@/stores/playlistFolderStore'
+import { useDialogBox } from '@/composables/useDialogBox'
 
-const { base, ContextMenuBase, open, trigger } = useContextMenu()
-const { go } = useRouter()
-const { toastWarning } = useMessageToaster()
+const props = defineProps<{ folder: PlaylistFolder }>()
+const { folder } = toRefs(props)
 
-const folder = ref<PlaylistFolder>()
+const CreatePlaylistForm = defineAsyncComponent(() => import('@/components/playlist/CreatePlaylistForm.vue'))
+const CreateSmartPlaylistForm = defineAsyncComponent(
+  () => import('@/components/playlist/smart-playlist/CreateSmartPlaylistForm.vue'),
+)
+const CreatePlaylistFolderForm = defineAsyncComponent(
+  () => import('@/components/playlist/CreatePlaylistFolderForm.vue'),
+)
+const EditPlaylistFolderForm = defineAsyncComponent(() => import('@/components/playlist/EditPlaylistFolderForm.vue'))
 
-const playlistsInFolder = computed(() => folder.value ? playlistStore.byFolder(folder.value) : [])
-const playable = computed(() => playlistsInFolder.value.length > 0)
+const { MenuItem, Separator, trigger } = useContextMenu()
+const { openModal } = useModal()
+const { go, url } = useRouter()
+const { toastWarning, toastSuccess } = useMessageToaster()
+const { showConfirmDialog } = useDialogBox()
 
-const play = () => trigger(async () => {
-  const songs = await songStore.fetchForPlaylistFolder(folder.value!)
+const playlistsInFolderTree = computed(() => playlistFolderStore.playlistsInTree(folder.value))
+const playable = computed(() => playlistsInFolderTree.value.length > 0)
 
-  if (songs.length) {
-    playbackService.queueAndPlay(songs)
-    go('queue')
-  } else {
-    toastWarning('No songs available.')
-  }
-})
+const play = () =>
+  trigger(async () => {
+    const songs = await playableStore.fetchForPlaylists(playlistsInFolderTree.value)
 
-const shuffle = () => trigger(async () => {
-  const songs = await songStore.fetchForPlaylistFolder(folder.value!)
+    if (songs.length) {
+      playback().queueAndPlay(songs)
+      go(url('queue'))
+    } else {
+      toastWarning('No songs available.')
+    }
+  })
 
-  if (songs.length) {
-    playbackService.queueAndPlay(songs, true)
-    go('queue')
-  } else {
-    toastWarning('No songs available.')
-  }
-})
+const shuffle = () =>
+  trigger(async () => {
+    const songs = await playableStore.fetchForPlaylists(playlistsInFolderTree.value)
 
-const createPlaylist = () => trigger(() => eventBus.emit('MODAL_SHOW_CREATE_PLAYLIST_FORM', folder.value!))
-const createSmartPlaylist = () => trigger(() => eventBus.emit('MODAL_SHOW_CREATE_SMART_PLAYLIST_FORM', folder.value!))
-const rename = () => trigger(() => eventBus.emit('MODAL_SHOW_EDIT_PLAYLIST_FOLDER_FORM', folder.value!))
-const destroy = () => trigger(() => eventBus.emit('PLAYLIST_FOLDER_DELETE', folder.value!))
+    if (songs.length) {
+      playback().queueAndPlay(songs, true)
+      go(url('queue'))
+    } else {
+      toastWarning('No songs available.')
+    }
+  })
 
-eventBus.on('PLAYLIST_FOLDER_CONTEXT_MENU_REQUESTED', async (e, _folder) => {
-  folder.value = _folder
-  await open(e.pageY, e.pageX)
-})
+const createPlaylist = () =>
+  trigger(() => openModal<'CREATE_PLAYLIST_FORM'>(CreatePlaylistForm, { folder: folder.value!, playables: [] }))
+const createSmartPlaylist = () =>
+  trigger(() => openModal<'CREATE_SMART_PLAYLIST_FORM'>(CreateSmartPlaylistForm, { folder: folder.value! }))
+const createFolder = () =>
+  trigger(() => openModal<'CREATE_PLAYLIST_FOLDER_FORM'>(CreatePlaylistFolderForm, { parent: folder.value }))
+const edit = () =>
+  trigger(() => openModal<'EDIT_PLAYLIST_FOLDER_FORM'>(EditPlaylistFolderForm, { folder: folder.value! }))
+
+const destroy = () =>
+  trigger(async () => {
+    if (
+      await showConfirmDialog(
+        `Delete the playlist folder "${folder.value.name}"? Its playlists and subfolders will be kept.`,
+      )
+    ) {
+      await playlistFolderStore.delete(folder.value)
+      toastSuccess(`Playlist folder "${folder.value.name}" deleted.`)
+    }
+  })
 </script>

@@ -10,7 +10,7 @@ class CollectTagsCommand extends Command
     protected $signature = 'koel:tags:collect {tag*}';
     protected $description = 'Collect additional tags from existing songs';
 
-    private const ALL_TAGS = [
+    private const array ALL_TAGS = [
         'title',
         'album',
         'artist',
@@ -23,20 +23,24 @@ class CollectTagsCommand extends Command
         'cover',
     ];
 
-    private const COLLECTABLE_TAGS = ['year', 'genre'];
+    private const array COLLECTABLE_TAGS = ['year', 'genre'];
 
     public function handle(): int
     {
+        if (config('koel.storage_driver') !== 'local') {
+            $this->components->error('This command only works with the local storage driver.');
+
+            return self::INVALID;
+        }
+
         $tags = collect($this->argument('tag'))->unique();
 
         if ($tags->diff(self::COLLECTABLE_TAGS)->isNotEmpty()) {
-            $this->error(
-                sprintf(
-                    'Invalid tag(s): %s. Allowed tags are: %s.',
-                    $tags->diff(self::COLLECTABLE_TAGS)->join(', '),
-                    implode(', ', self::COLLECTABLE_TAGS)
-                )
-            );
+            $this->error(sprintf(
+                'Invalid tag(s): %s. Allowed tags are: %s.',
+                $tags->diff(self::COLLECTABLE_TAGS)->join(', '),
+                implode(', ', self::COLLECTABLE_TAGS),
+            ));
 
             return self::FAILURE;
         }

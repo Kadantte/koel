@@ -1,27 +1,14 @@
 <template>
-  <i>
-    <span />
-    <span />
-    <span />
+  <i class="relative flex gap-1 content-between w-[13px] aspect-square">
+    <span v-for="i in 3" :key="i" />
   </i>
 </template>
 
-<style lang="scss" scoped>
-i {
-  position: relative;
-  display: flex;
-  justify-content: space-between;
-  width: 13px;
-  height: 13px;
-}
-
+<style lang="postcss" scoped>
+@reference '@css/app.pcss';
 span {
-  width: 3px;
-  height: 100%;
-  background-color: currentColor;
-  border-radius: 9999px;
-  animation: bounce 2.2s ease-out infinite alternate;
-  transform-origin: bottom;
+  @apply w-[3px] h-full bg-current rounded-full origin-bottom;
+  animation: sound-bars-bounce 2.2s ease-out infinite alternate;
 
   &:nth-of-type(2) {
     animation-delay: -2.2s;
@@ -32,13 +19,13 @@ span {
   }
 }
 
-@keyframes bounce {
+@keyframes sound-bars-bounce {
   10% {
     transform: scaleY(0.2);
   }
 
   40% {
-    transform: scaleY(.7);
+    transform: scaleY(0.7);
   }
 
   60% {

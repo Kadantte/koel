@@ -1,71 +1,52 @@
 <template>
-  <span class="view-modes">
-    <label
-      v-koel-tooltip
-      :class="{ active: value === 'thumbnails' }"
-      class="thumbnails"
-      data-testid="view-mode-thumbnail"
-      title="View as thumbnails"
-    >
-      <input v-model="value" class="hidden" name="view-mode" type="radio" value="thumbnails">
-      <Icon :icon="faThumbnailsHehe" />
-      <span class="hidden">View as thumbnails</span>
+  <span class="flex w-[64px] border border-solid border-k-fg-20 rounded-md overflow-hidden">
+    <label v-koel-tooltip :class="{ active: value === 'grid' }" data-testid="view-mode-grid" title="View as grid">
+      <input v-model="value" class="hidden" name="view-mode" type="radio" value="grid" />
+      <LayoutGridIcon :size="16" />
+      <span class="hidden">View as grid</span>
     </label>
 
     <label
+      v-if="secondary === 'table'"
+      v-koel-tooltip
+      :class="{ active: value === 'table' }"
+      data-testid="view-mode-table"
+      title="View as table"
+    >
+      <input v-model="value" class="hidden" name="view-mode" type="radio" value="table" />
+      <TableIcon :size="16" />
+      <span class="hidden">View as table</span>
+    </label>
+
+    <label
+      v-else
       v-koel-tooltip
       :class="{ active: value === 'list' }"
-      class="list"
       data-testid="view-mode-list"
       title="View as list"
     >
-      <input v-model="value" class="hidden" name="view-mode" type="radio" value="list">
-      <Icon :icon="faList" />
+      <input v-model="value" class="hidden" name="view-mode" type="radio" value="list" />
+      <LayoutListIcon :size="16" />
       <span class="hidden">View as list</span>
     </label>
   </span>
 </template>
 
 <script lang="ts" setup>
-import { faMicrosoft as faThumbnailsHehe } from '@fortawesome/free-brands-svg-icons'
-import { faList } from '@fortawesome/free-solid-svg-icons'
-import { computed } from 'vue'
+import { LayoutGridIcon, LayoutListIcon, TableIcon } from 'lucide-vue-next'
 
-const props = withDefaults(defineProps<{ modelValue?: ArtistAlbumViewMode }>(), { modelValue: 'thumbnails' })
+withDefaults(defineProps<{ secondary?: 'list' | 'table' }>(), { secondary: 'list' })
 
-const emit = defineEmits<{ (e: 'update:modelValue', value: ArtistAlbumViewMode): void }>()
-
-const value = computed({
-  get: () => props.modelValue,
-  set: value => emit('update:modelValue', value)
-})
+const value = defineModel<ViewMode>({ default: 'grid' })
 </script>
 
-<style lang="scss" scoped>
-.view-modes {
-  display: flex;
-  width: 64px;
-  border: 1px solid rgba(255, 255, 255, .2);
-  border-radius: 5px;
-  overflow: hidden;
+<style lang="postcss" scoped>
+@reference '@css/app.pcss';
+label {
+  @apply flex-1 min-w-0 flex items-center justify-center py-2 mb-0 cursor-pointer;
 
-  label {
-    width: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    height: 2rem;
-    margin-bottom: 0;
-    cursor: pointer;
-
-    &.active {
-      background: var(--color-text-primary);
-      color: var(--color-bg-primary);
-    }
-  }
-
-  @media only screen and (max-width: 768px) {
-    margin-top: 8px;
+  &.active {
+    @apply bg-k-fg text-k-bg;
   }
 }
 </style>

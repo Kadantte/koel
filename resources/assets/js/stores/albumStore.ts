@@ -1,96 +1,134 @@
-import { reactive, UnwrapNestedRefs } from 'vue'
-import { differenceBy, merge, unionBy } from 'lodash'
-import { cache, http } from '@/services'
-import { arrayify, logger } from '@/utils'
-import { songStore } from '@/stores'
+import type { Reactive } from 'vue'
+import { reactive } from 'vue'
+import { differenceBy, unionBy } from 'lodash-es'
+import { cache } from '@/services/cache'
+import { http } from '@/services/http'
+import { flattenParams } from '@/utils/helpers'
+import { logger } from '@/utils/logger'
+import { useVault } from '@/composables/useVault'
+import { playableStore as songStore } from '@/stores/playableStore'
 
-const UNKNOWN_ALBUM_ID = 1
+const UNKNOWN_ALBUM_NAME = 'Unknown Album'
+
+export interface AlbumUpdateData {
+  name: Album['name']
+  year: Album['year']
+  cover?: Album['cover'] | null
+}
+
+interface AlbumListPaginateParams extends CursorPaginateParams<AlbumListSortField> {
+  favorites_only: boolean
+}
 
 export const albumStore = {
-  vault: new Map<number, UnwrapNestedRefs<Album>>(),
+  ...useVault<Album>(),
 
   state: reactive({
-    albums: [] as Album[]
+    albums: [] as Album[],
   }),
 
-  byId (id: number) {
-    return this.vault.get(id)
-  },
-
-  removeByIds (ids: number[]) {
-    this.state.albums = differenceBy(this.state.albums, ids.map(id => this.byId(id)), 'id')
+  removeByIds(ids: Album['id'][]) {
+    this.state.albums = differenceBy(
+      this.state.albums,
+      ids.map(id => this.byId(id)),
+      'id',
+    )
     ids.forEach(id => {
       this.vault.delete(id)
       cache.remove(['album', id])
     })
   },
 
-  isUnknown: (album: Album | number) => {
-    if (typeof album === 'number') return album === UNKNOWN_ALBUM_ID
-    return album.id === UNKNOWN_ALBUM_ID
+  isUnknown: (album: Album | Album['name']) => {
+    if (typeof album === 'string') {
+      return album === UNKNOWN_ALBUM_NAME
+    }
+
+    return album.name === UNKNOWN_ALBUM_NAME
   },
 
-  syncWithVault (albums: Album | Album[]) {
-    return arrayify(albums).map(album => {
-      let local = this.vault.get(album.id)
-      local = reactive(local ? merge(local, album) : album)
-      this.vault.set(album.id, local)
+  async update(album: Album, data: AlbumUpdateData) {
+    const updated = await http.put<Album>(`albums/${album.id}`, data)
+    this.state.albums = unionBy(this.state.albums, this.syncWithVault(updated), 'id')
 
-      return local
-    })
-  },
-
-  /**
-   * Upload a cover for an album.
-   *
-   * @param {Album} album The album object
-   * @param {string} cover The content data string of the cover
-   */
-  async uploadCover (album: Album, cover: string) {
-    album.cover = (await http.put<{ coverUrl: string }>(`album/${album.id}/cover`, { cover })).coverUrl
-    songStore.byAlbum(album).forEach(song => song.album_cover = album.cover)
-
-    // sync to vault
-    this.byId(album.id)!.cover = album.cover
-
-    return album.cover
+    songStore.syncAlbumProperties(album)
   },
 
   /**
    * Fetch the (blurry) thumbnail-sized version of an album's cover.
    */
-  fetchThumbnail: async (id: number) => {
-    return (await http.get<{ thumbnailUrl: string }>(`album/${id}/thumbnail`)).thumbnailUrl
+  fetchThumbnail: async (id: Album['id']) => {
+    return (await http.get<{ thumbnailUrl: string }>(`albums/${id}/thumbnail`)).thumbnailUrl
   },
 
-  async resolve (id: number) {
+  async resolve(id: Album['id']) {
     let album = this.byId(id)
 
     if (!album) {
       try {
         album = this.syncWithVault(
-          await cache.remember<Album>(['album', id], async () => await http.get<Album>(`albums/${id}`))
+          await cache.remember(['album', id], async () => await http.get<Album>(`albums/${id}`)),
         )[0]
-      } catch (e) {
-        logger.error(e)
+      } catch (error: unknown) {
+        logger.error(error)
       }
     }
 
     return album
   },
 
-  async paginate (page: number) {
-    const resource = await http.get<PaginatorResource>(`albums?page=${page}`)
+  async paginate(params: AlbumListPaginateParams) {
+    const query = new URLSearchParams(flattenParams(params))
+    query.set('cursor', params.cursor ?? '')
+
+    const resource = await http.get<CursorPaginatorResource<Album>>(`albums?${query}`)
     this.state.albums = unionBy(this.state.albums, this.syncWithVault(resource.data), 'id')
 
-    return resource.links.next ? ++resource.meta.current_page : null
+    return resource.meta.next_cursor
   },
 
-  async fetchForArtist (artist: Artist | number) {
-    const id = typeof artist === 'number' ? artist : artist.id
+  async fetchForArtist(artist: Artist | Artist['id']) {
+    const id = typeof artist === 'string' ? artist : artist.id
 
     return this.syncWithVault(
-      await cache.remember<Album[]>(['artist-albums', id], async () => await http.get<Album[]>(`artists/${id}/albums`))
+      await cache.remember(['artist-albums', id], async () => await http.get<Album[]>(`artists/${id}/albums`)),
     )
-  }
+  },
+
+  async toggleFavorite(album: Reactive<Album>) {
+    // Don't wait for the HTTP response to update the status, just toggle right away.
+    // We'll update the liked status again after the HTTP request.
+    album.favorite = !album.favorite
+
+    const favorite = await http.post<Favorite | null>(`favorites/toggle`, {
+      type: 'album',
+      id: album.id,
+    })
+
+    album.favorite = Boolean(favorite)
+  },
+
+  async rate(album: Reactive<Album>, rating: number) {
+    const previous = album.rating
+    album.rating = rating
+
+    try {
+      const updated = await http.put<Album>(`albums/${album.id}/rating`, { rating })
+
+      if (album.rating === rating) {
+        album.rating = updated.rating
+      }
+    } catch (error) {
+      if (album.rating === rating) {
+        album.rating = previous
+      }
+
+      throw error
+    }
+  },
+
+  reset() {
+    this.vault.clear()
+    this.state.albums = []
+  },
 }

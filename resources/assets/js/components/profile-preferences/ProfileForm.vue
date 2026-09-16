@@ -1,128 +1,83 @@
 <template>
-  <form data-testid="update-profile-form" @submit.prevent="update">
-    <div class="form-row">
-      <label>
-        Current Password
-        <input
-          v-model="profile.current_password"
-          v-koel-focus
-          name="current_password"
-          placeholder="Required to update your profile"
-          required
-          type="password"
-          data-testid="currentPassword"
-        >
-      </label>
+  <form data-testid="update-profile-form" @submit.prevent="handleSubmit">
+    <AlertBox v-if="currentUser.sso_provider">
+      <template v-if="currentUser.sso_provider === 'Reverse Proxy'">
+        You’re authenticated by a reverse proxy.
+      </template>
+      <template v-else>
+        You’re logged in via single sign-on provided by <strong>{{ currentUser.sso_provider }}</strong
+        >.
+      </template>
+      You can still update your name and avatar here.
+    </AlertBox>
+
+    <div class="flex flex-col gap-3 md:flex-row md:gap-8 w-full md:w-[640px]">
+      <div class="flex-1 space-y-5">
+        <FormRow>
+          <template #label>Name</template>
+          <TextInput v-model="data.name" data-testid="name" name="name" />
+        </FormRow>
+
+        <FormRow>
+          <template #label>Email Address</template>
+          <TextInput
+            id="inputProfileEmail"
+            v-model="data.email"
+            :readonly="currentUser.sso_provider"
+            data-testid="email"
+            name="email"
+            required
+            type="email"
+          />
+        </FormRow>
+      </div>
+
+      <div>
+        <EditableProfileAvatar v-model:avatar="data.avatar" :name="data.name" />
+      </div>
     </div>
 
-    <div class="form-row">
-      <label>
-        Name
-        <input id="inputProfileName" v-model="profile.name" name="name" required type="text" data-testid="name">
-      </label>
-    </div>
-
-    <div class="form-row">
-      <label>
-        Email Address
-        <input id="inputProfileEmail" v-model="profile.email" name="email" required type="email" data-testid="email">
-      </label>
-    </div>
-
-    <div class="form-row">
-      <label>
-        New Password
-        <PasswordField
-          placeholder="Leave empty to keep current password"
-          v-model="profile.new_password"
-          data-testid="newPassword"
-          autocomplete="new-password"
-        />
-        <span class="password-rules help">
-          Min. 10 characters. Should be a mix of characters, numbers, and symbols.
-        </span>
-      </label>
-    </div>
-
-    <div class="form-row">
+    <footer class="mt-8">
       <Btn class="btn-submit" type="submit">Save</Btn>
-      <span v-if="isDemo()" class="demo-notice">
-        Changes will not be saved in the demo version.
-      </span>
-    </div>
+      <span v-if="isDemo" class="text-[.95rem] opacity-70 ml-2">Changes will not be saved in the demo version.</span>
+    </footer>
   </form>
 </template>
 
 <script lang="ts" setup>
-import { onMounted, ref } from 'vue'
-import { UpdateCurrentProfileData, userStore } from '@/stores'
-import { isDemo, logger, parseValidationError } from '@/utils'
-import { useDialogBox, useMessageToaster } from '@/composables'
+import { pick } from 'lodash-es'
+import type { UpdateCurrentProfileData } from '@/services/authService'
+import { authService } from '@/services/authService'
+import { useAuthorization } from '@/composables/useAuthorization'
+import { useMessageToaster } from '@/composables/useMessageToaster'
+import { useForm } from '@/composables/useForm'
 
-import Btn from '@/components/ui/Btn.vue'
-import PasswordField from '@/components/ui/PasswordField.vue'
+import Btn from '@/components/ui/form/Btn.vue'
+import EditableProfileAvatar from '@/components/profile-preferences/EditableProfileAvatar.vue'
+import AlertBox from '@/components/ui/AlertBox.vue'
+import TextInput from '@/components/ui/form/TextInput.vue'
+import FormRow from '@/components/ui/form/FormRow.vue'
 
 const { toastSuccess } = useMessageToaster()
-const { showErrorDialog } = useDialogBox()
-const profile = ref<UpdateCurrentProfileData>({} as unknown as UpdateCurrentProfileData)
+const { currentUser } = useAuthorization()
 
-onMounted(() => {
-  profile.value = {
-    name: userStore.current.name,
-    email: userStore.current.email,
-    current_password: null
-  }
-})
+const isDemo = window.KOEL.is_demo
 
-const update = async () => {
-  if (!profile.value) {
-    throw Error()
-  }
-
-  if (isDemo()) {
-    toastSuccess('Profile updated.')
-    return
-  }
-
-  try {
-    await userStore.updateProfile(Object.assign({}, profile.value))
-    profile.value.current_password = null
-    delete profile.value.new_password
-    toastSuccess('Profile updated.')
-  } catch (error: any) {
-    const msg = error.response.status === 422 ? parseValidationError(error.response.data)[0] : 'Unknown error.'
-    showErrorDialog(msg, 'Error')
-    logger.log(error)
-  }
-}
-</script>
-
-<style lang="scss" scoped>
-form {
-  width: 33%;
-
-  input {
-    width: 100%;
-  }
-}
-
-.password-rules {
-  display: block;
-  margin-top: .75rem;
-}
-
-.demo-notice {
-  font-size: .95rem;
-  opacity: .7;
-  margin-left: 5px;
-}
-
-@media only screen and (max-width: 667px) {
-  input {
-    &[type="text"], &[type="email"], &[type="password"] {
-      width: 100%;
-      height: 32px;
+const { data, handleSubmit } = useForm<UpdateCurrentProfileData>({
+  initialValues: {
+    ...pick(currentUser.value, 'name', 'email'),
+    avatar: undefined,
+  },
+  onSubmit: async data => {
+    if (isDemo) {
+      return
     }
-  }
-}
-</style>
+
+    await authService.updateProfile(data)
+  },
+  onSuccess: () => {
+    data.avatar = undefined
+    toastSuccess('Profile updated.')
+  },
+})
+</script>

@@ -1,8 +1,4 @@
-/// <reference types="vite/client" />
-
-interface ImportMetaEnv {
-  readonly VITE_KOEL_ENV: 'demo' | undefined
-}
+/// <reference types="vite-plus/client" />
 
 interface ImportMeta {
   readonly env: ImportMetaEnv

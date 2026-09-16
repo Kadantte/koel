@@ -1,50 +1,95 @@
-import { favoriteStore } from '@/stores'
-import factory from '@/__tests__/factory'
-import { expect, it } from 'vitest'
-import UnitTestCase from '@/__tests__/UnitTestCase'
-import { downloadService } from './downloadService'
+import { describe, expect, it } from 'vite-plus/test'
+import { createHarness } from '@/__tests__/TestHarness'
+import { downloadService, DownloadLimitExceededError } from './downloadService'
+import { playableStore } from '@/stores/playableStore'
 
-new class extends UnitTestCase {
-  protected test () {
-    it('downloads songs', () => {
-      const mock = this.mock(downloadService, 'trigger')
-      downloadService.fromSongs([factory<Song>('song', { id: 'foo' }), factory<Song>('song', { id: 'bar' })])
+describe('downloadService', () => {
+  const h = createHarness()
 
-      expect(mock).toHaveBeenCalledWith('songs?songs[]=bar&songs[]=foo&')
-    })
+  it('downloads a single playable without pre-flight check', async () => {
+    const triggerMock = h.mock(downloadService, 'trigger')
+    const checkMock = h.mock(downloadService, 'checkDownloadable')
 
-    it('downloads all by artist', () => {
-      const mock = this.mock(downloadService, 'trigger')
-      downloadService.fromArtist(factory<Artist>('artist', { id: 42 }))
+    await downloadService.fromPlayables([h.factory('song').make({ id: 'bar' })])
 
-      expect(mock).toHaveBeenCalledWith('artist/42')
-    })
+    expect(checkMock).not.toHaveBeenCalled()
+    expect(triggerMock).toHaveBeenCalledWith('songs?songs[]=bar')
+  })
 
-    it('downloads all in album', () => {
-      const mock = this.mock(downloadService, 'trigger')
-      downloadService.fromAlbum(factory<Album>('album', { id: 42 }))
+  it('downloads multiple playables with pre-flight check', async () => {
+    const triggerMock = h.mock(downloadService, 'trigger')
+    h.mock(downloadService, 'checkDownloadable').mockResolvedValue(undefined)
 
-      expect(mock).toHaveBeenCalledWith('album/42')
-    })
+    const songs = [h.factory('song').make({ id: 'foo' }), h.factory('song').make({ id: 'bar' })]
+    await downloadService.fromPlayables(songs)
 
-    it('downloads a playlist', () => {
-      const mock = this.mock(downloadService, 'trigger')
-      const playlist = factory<Playlist>('playlist', { id: 42 })
+    expect(triggerMock).toHaveBeenCalled()
+  })
 
-      downloadService.fromPlaylist(playlist)
+  it('does not download multiple playables if check fails', async () => {
+    const triggerMock = h.mock(downloadService, 'trigger')
+    h.mock(downloadService, 'checkDownloadable').mockRejectedValue(new DownloadLimitExceededError('Limit exceeded'))
 
-      expect(mock).toHaveBeenCalledWith('playlist/42')
-    })
+    const songs = [h.factory('song').make({ id: 'foo' }), h.factory('song').make({ id: 'bar' })]
 
-    it.each<[Song[], boolean]>([[[], false], [factory<Song>('song', 5), true]])(
-      'downloads favorites if available',
-      (songs, triggered) => {
-        const mock = this.mock(downloadService, 'trigger')
-        favoriteStore.state.songs = songs
+    await expect(downloadService.fromPlayables(songs)).rejects.toThrow(DownloadLimitExceededError)
+    expect(triggerMock).not.toHaveBeenCalled()
+  })
 
-        downloadService.fromFavorites()
+  it('downloads all by artist', async () => {
+    const triggerMock = h.mock(downloadService, 'trigger')
+    h.mock(downloadService, 'checkDownloadable').mockResolvedValue(undefined)
+    const artist = h.factory('artist').make()
 
-        triggered ? expect(mock).toHaveBeenCalledWith('favorites') : expect(mock).not.toHaveBeenCalled()
-      })
-  }
-}
+    await downloadService.fromArtist(artist)
+
+    expect(triggerMock).toHaveBeenCalledWith(`artist/${artist.id}`)
+  })
+
+  it('downloads all in album', async () => {
+    const triggerMock = h.mock(downloadService, 'trigger')
+    h.mock(downloadService, 'checkDownloadable').mockResolvedValue(undefined)
+    const album = h.factory('album').make()
+
+    await downloadService.fromAlbum(album)
+
+    expect(triggerMock).toHaveBeenCalledWith(`album/${album.id}`)
+  })
+
+  it('downloads a playlist', async () => {
+    const triggerMock = h.mock(downloadService, 'trigger')
+    h.mock(downloadService, 'checkDownloadable').mockResolvedValue(undefined)
+    const playlist = h.factory('playlist').make()
+
+    await downloadService.fromPlaylist(playlist)
+
+    expect(triggerMock).toHaveBeenCalledWith(`playlist/${playlist.id}`)
+  })
+
+  it('downloads favorites if available', async () => {
+    const triggerMock = h.mock(downloadService, 'trigger')
+    h.mock(downloadService, 'checkDownloadable').mockResolvedValue(undefined)
+    playableStore.state.favorites = h.factory('song').make(5)
+
+    await downloadService.fromFavorites()
+
+    expect(triggerMock).toHaveBeenCalledWith('favorites')
+  })
+
+  it('does not download favorites if empty', async () => {
+    const triggerMock = h.mock(downloadService, 'trigger')
+    playableStore.state.favorites = []
+
+    await downloadService.fromFavorites()
+
+    expect(triggerMock).not.toHaveBeenCalled()
+  })
+
+  it('throws DownloadLimitExceededError if check fails', async () => {
+    const triggerMock = h.mock(downloadService, 'trigger')
+    h.mock(downloadService, 'checkDownloadable').mockRejectedValue(new DownloadLimitExceededError('Limit exceeded'))
+
+    await expect(downloadService.fromAlbum(h.factory('album').make())).rejects.toThrow(DownloadLimitExceededError)
+    expect(triggerMock).not.toHaveBeenCalled()
+  })
+})

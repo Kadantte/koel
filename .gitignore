@@ -3,6 +3,7 @@ node_modules
 Homestead.yaml
 Homestead.json
 .env
+/Caddyfile
 .idea
 /_ide_helper.php
 /config.testing
@@ -11,6 +12,7 @@ db.mwb.bak
 bower_components
 /CHANGE
 koel.db
+/stats.html
 
 ### Node ###
 # Logs
@@ -73,16 +75,21 @@ Temporary Items
 *.swo
 *~
 
-# Cypress
-cypress/screenshots/
-cypress/videos/
-cypress/downloads/
 
 /log
 coverage.xml
 .phpunit.result.cache
+.phpunit.cache
 log.json
 
 .php_cs.cache
 
+### VitePress ###
+docs/.vitepress/dist
+docs/.vitepress/cache
+
 demo-credits.json
+
+public/sandbox
+public/storage
+build/

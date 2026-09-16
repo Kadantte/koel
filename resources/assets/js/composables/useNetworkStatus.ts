@@ -1,21 +1,13 @@
-import { computed, onUnmounted, ref } from 'vue'
+import { useOnline } from '@vueuse/core'
+
+/**
+ * Singleton wrapper around VueUse's useOnline() so that all components
+ * share the same reactive online/offline state.
+ */
+const online = useOnline()
 
 export const useNetworkStatus = () => {
-  const online = ref(navigator.onLine)
-  const offline = computed(() => !online.value)
-
-  const updateOnlineStatus = () => (online.value = navigator.onLine)
-
-  window.addEventListener('online', updateOnlineStatus)
-  window.addEventListener('offline', updateOnlineStatus)
-
-  onUnmounted(() => {
-    window.removeEventListener('online', updateOnlineStatus)
-    window.removeEventListener('offline', updateOnlineStatus)
-  })
-
   return {
     online,
-    offline
   }
 }

@@ -2,24 +2,32 @@
 
 namespace App\Http\Resources;
 
-use App\Values\Genre;
+use App\Values\GenreSummary;
 use Illuminate\Http\Resources\Json\JsonResource;
 
 class GenreResource extends JsonResource
 {
-    public function __construct(private Genre $genre)
-    {
-        parent::__construct($genre);
+    public const array JSON_STRUCTURE = [
+        'type',
+        'id',
+        'name',
+    ];
+
+    public function __construct(
+        private readonly GenreSummary $summary,
+    ) {
+        parent::__construct($summary);
     }
 
-    /** @return array<mixed> */
+    /** @inheritdoc */
     public function toArray($request): array
     {
         return [
             'type' => 'genres',
-            'name' => $this->genre->name,
-            'song_count' => $this->genre->songCount,
-            'length' => $this->genre->length,
+            'id' => $this->summary->publicId,
+            'name' => $this->summary->name,
+            'song_count' => $this->summary->songCount,
+            'length' => $this->summary->length,
         ];
     }
 }

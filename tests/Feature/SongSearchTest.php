@@ -2,15 +2,35 @@
 
 namespace Tests\Feature;
 
+use App\Http\Resources\SongResource;
 use App\Models\Song;
+use PHPUnit\Framework\Attributes\Test;
+use Tests\TestCase;
+
+use function Tests\create_user;
 
 class SongSearchTest extends TestCase
 {
-    public function testSearch(): void
+    public function setUp(): void
     {
-        Song::factory(10)->create(['title' => 'A Foo Song']);
+        parent::setUp();
 
-        $this->getAs('api/search/songs?q=foo')
-            ->assertJsonStructure(['*' => SongTest::JSON_STRUCTURE]);
+        config()->set('scout.driver', 'collection');
+    }
+
+    protected function tearDown(): void
+    {
+        config()->set('scout.driver', null);
+
+        parent::tearDown();
+    }
+
+    #[Test]
+    public function search(): void
+    {
+        $user = create_user();
+        Song::factory()->for($user, 'owner')->state(['title' => 'Foo Song'])->createMany(2);
+
+        $this->getAs('api/search/songs?q=foo', $user)->assertJsonStructure([0 => SongResource::JSON_STRUCTURE]);
     }
 }

@@ -7,9 +7,9 @@ namespace App\Http\Requests\API;
  */
 class ScrobbleRequest extends Request
 {
-    /** @return array<mixed> */
+    /** @inheritdoc */
     public function rules(): array
     {
-        return ['timestamp' => 'required|numeric'];
+        return ['timestamp' => ['required', 'numeric']];
     }
 }

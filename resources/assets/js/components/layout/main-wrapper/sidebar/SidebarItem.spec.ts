@@ -1,35 +1,46 @@
-import { expect, it } from 'vitest'
-import UnitTestCase from '@/__tests__/UnitTestCase'
-import { screen } from '@testing-library/vue'
-import { faHome } from '@fortawesome/free-solid-svg-icons'
-import SidebarItem from './SidebarItem.vue'
+import { describe, expect, it } from 'vite-plus/test'
+import { screen, waitFor } from '@testing-library/vue'
+import { createHarness } from '@/__tests__/TestHarness'
+import { eventBus } from '@/utils/eventBus'
+import Component from './SidebarItem.vue'
 
-new class extends UnitTestCase {
-  private renderComponent () {
-    return this.render(SidebarItem, {
+describe('sidebarItem', () => {
+  const h = createHarness()
+
+  const renderComponent = () => {
+    return h.render(Component, {
       props: {
-        icon: faHome,
         href: '#',
-        screen: 'Home'
       },
       slots: {
-        default: 'Home'
-      }
+        default: 'Home',
+      },
     })
   }
 
-  protected test () {
-    it('renders', () => expect(this.renderComponent().html()).toMatchSnapshot())
+  it('renders', () => expect(renderComponent().html()).toMatchSnapshot())
 
-    it('activates when the screen matches', async () => {
-      this.renderComponent()
+  it('navigates and toggles sidebar on single click', async () => {
+    const mock = h.mock(eventBus, 'emit')
+    renderComponent()
 
-      await this.router.activateRoute({
-        screen: 'Home',
-        path: '_'
-      })
+    await h.user.click(screen.getByText('Home'))
 
-      expect(screen.getByRole('link').classList.contains('active')).toBe(true)
+    await waitFor(
+      () => {
+        expect(mock).toHaveBeenCalledWith('TOGGLE_SIDEBAR')
+      },
+      { timeout: 500 },
+    )
+  })
+
+  it('emits dblclick on double click', async () => {
+    const { emitted } = renderComponent()
+
+    await h.user.dblClick(screen.getByText('Home'))
+
+    await waitFor(() => {
+      expect(emitted().dblclick).toBeTruthy()
     })
-  }
-}
+  })
+})

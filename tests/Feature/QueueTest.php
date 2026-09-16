@@ -2,89 +2,110 @@
 
 namespace Tests\Feature;
 
+use App\Http\Resources\SongResource;
 use App\Models\QueueState;
 use App\Models\Song;
-use App\Models\User;
+use PHPUnit\Framework\Attributes\Test;
+use Tests\TestCase;
+
+use function Tests\create_user;
 
 class QueueTest extends TestCase
 {
     public const QUEUE_STATE_JSON_STRUCTURE = [
         'current_song',
-        'songs' => ['*' => SongTest::JSON_STRUCTURE],
+        'songs' => ['*' => SongResource::JSON_STRUCTURE],
         'playback_position',
     ];
 
-    public function testGetEmptyState(): void
+    #[Test]
+    public function getEmptyState(): void
     {
-        $this->getAs('api/queue/state')
-            ->assertJsonStructure(self::QUEUE_STATE_JSON_STRUCTURE);
+        $this->getAs('api/queue/state')->assertJsonStructure(self::QUEUE_STATE_JSON_STRUCTURE);
     }
 
-    public function testGetExistingState(): void
+    #[Test]
+    public function getExistingState(): void
     {
-        /** @var QueueState $queueState */
-        $queueState = QueueState::factory()->create([
+        $queueState = QueueState::factory()->createOne([
             'current_song_id' => Song::factory(),
             'playback_position' => 123,
         ]);
 
-        $this->getAs('api/queue/state', $queueState->user)
-            ->assertJsonStructure(self::QUEUE_STATE_JSON_STRUCTURE);
+        $this->getAs('api/queue/state', $queueState->user)->assertJsonStructure(self::QUEUE_STATE_JSON_STRUCTURE);
     }
 
-    public function testUpdateStateWithoutExistingState(): void
+    #[Test]
+    public function updateStateWithoutExistingState(): void
     {
-        /** @var User $user */
-        $user = User::factory()->create();
+        $user = create_user();
 
-        self::assertDatabaseMissing(QueueState::class, ['user_id' => $user->id]);
+        $this->assertDatabaseMissing(QueueState::class, ['user_id' => $user->id]);
 
-        $songIds = Song::factory(3)->create()->pluck('id')->toArray();
+        $songIds = Song::factory()->createMany(2)->modelKeys();
 
-        $this->putAs('api/queue/state', ['songs' => $songIds], $user)
-            ->assertNoContent();
+        $this->putAs('api/queue/state', ['songs' => $songIds], $user)->assertNoContent();
 
         /** @var QueueState $queue */
-        $queue = QueueState::query()->where('user_id', $user->id)->firstOrFail();
+        $queue = QueueState::query()->whereBelongsTo($user)->firstOrFail();
         self::assertEqualsCanonicalizing($songIds, $queue->song_ids);
     }
 
-    public function testUpdatePlaybackStatus(): void
+    #[Test]
+    public function updateStateWithEmptySongList(): void
     {
-        /** @var QueueState $state */
-        $state = QueueState::factory()->create();
+        $user = create_user();
 
-        /** @var Song $song */
-        $song = Song::factory()->create();
+        $this->assertDatabaseMissing(QueueState::class, ['user_id' => $user->id]);
 
-        $this->putAs('api/queue/playback-status', ['song' => $song->id, 'position' => 123], $state->user)
-            ->assertNoContent();
+        $this->putAs('api/queue/state', ['songs' => []], $user)->assertNoContent();
+
+        /** @var QueueState $queue */
+        $queue = QueueState::query()->whereBelongsTo($user)->firstOrFail();
+        self::assertSame([], $queue->song_ids);
+    }
+
+    #[Test]
+    public function updatePlaybackStatus(): void
+    {
+        $state = QueueState::factory()->createOne();
+        $song = Song::factory()->createOne();
+
+        $this->putAs(
+            'api/queue/playback-status',
+            ['song' => $song->id, 'position' => 123],
+            $state->user,
+        )->assertNoContent();
 
         $state->refresh();
         self::assertSame($song->id, $state->current_song_id);
         self::assertSame(123, $state->playback_position);
+        $anotherSong = Song::factory()->createOne();
 
-        /** @var Song $anotherSong */
-        $anotherSong = Song::factory()->create();
-
-        $this->putAs('api/queue/playback-status', ['song' => $anotherSong->id, 'position' => 456], $state->user)
-            ->assertNoContent();
+        $this->putAs(
+            'api/queue/playback-status',
+            ['song' => $anotherSong->id, 'position' => 456],
+            $state->user,
+        )->assertNoContent();
 
         $state->refresh();
         self::assertSame($anotherSong->id, $state->current_song_id);
         self::assertSame(456, $state->playback_position);
     }
 
-    public function testFetchSongs(): void
+    #[Test]
+    public function fetchSongs(): void
     {
-        Song::factory(10)->create();
+        Song::factory()->createMany(10);
 
-        $this->getAs('api/queue/fetch?order=rand&limit=5')
-            ->assertJsonStructure(['*' => SongTest::JSON_STRUCTURE])
+        $this
+            ->getAs('api/queue/fetch?order=rand&limit=5')
+            ->assertJsonStructure([0 => SongResource::JSON_STRUCTURE])
             ->assertJsonCount(5, '*');
 
-        $this->getAs('api/queue/fetch?order=asc&sort=title&limit=5')
-            ->assertJsonStructure(['*' => SongTest::JSON_STRUCTURE])
+        $this
+            ->getAs('api/queue/fetch?order=asc&sort=title&limit=5')
+            ->assertJsonStructure([0 => SongResource::JSON_STRUCTURE])
             ->assertJsonCount(5, '*');
     }
 }

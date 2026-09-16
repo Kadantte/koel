@@ -1,55 +1,97 @@
 <?php
 
-/*
-|--------------------------------------------------------------------------
-| Create The Application
-|--------------------------------------------------------------------------
-|
-| The first thing we will do is create a new Laravel application instance
-| which serves as the "glue" for all the components of Laravel, and is
-| the IoC container for the system binding all of the various parts.
-|
-*/
-
+use App\Exceptions\SubsonicAwareErrorRenderer;
+use App\Http\Middleware\AddRequestContextForLogging;
+use App\Http\Middleware\AuthenticateAudioRequests;
+use App\Http\Middleware\EnsureEmbedsEnabled;
+use App\Http\Middleware\ForceHttps;
+use App\Http\Middleware\HandleDemoMode;
+use App\Http\Middleware\ObjectStorageAuthenticate;
+use App\Http\Middleware\RestrictPlusFeatures;
+use App\Providers\RouteServiceProvider;
+use Illuminate\Auth\AuthenticationException;
 use Illuminate\Foundation\Application;
+use Illuminate\Foundation\Configuration\Exceptions;
+use Illuminate\Foundation\Configuration\Middleware;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Route;
+use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
+use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 
-$app = new Application(dirname(__DIR__));
+return Application::configure(basePath: dirname(__DIR__))
+    ->withRouting(
+        using: static function (): void {
+            RouteServiceProvider::loadVersionAwareRoutes('web');
+            RouteServiceProvider::loadVersionAwareRoutes('api');
+            Route::middleware('api')->group(base_path('routes/subsonic.php'));
+        },
+        commands: __DIR__ . '/../routes/console.php',
+        channels: __DIR__ . '/../routes/channels.php',
+        health: '/up',
+    )
+    ->withMiddleware(static function (Middleware $middleware): void {
+        $middleware->api(prepend: [
+            AddRequestContextForLogging::class,
+        ]);
 
-/*
-|--------------------------------------------------------------------------
-| Bind Important Interfaces
-|--------------------------------------------------------------------------
-|
-| Next, we need to bind some important interfaces into the container so
-| we will be able to resolve them when needed. The kernels serve the
-| incoming requests to this application from both the web and CLI.
-|
-*/
+        $middleware->web(prepend: [
+            AddRequestContextForLogging::class,
+        ]);
 
-$app->singleton(
-    Illuminate\Contracts\Http\Kernel::class,
-    App\Http\Kernel::class
-);
+        $middleware->api(append: [
+            RestrictPlusFeatures::class,
+            HandleDemoMode::class,
+            ForceHttps::class,
+        ]);
 
-$app->singleton(
-    Illuminate\Contracts\Console\Kernel::class,
-    App\Console\Kernel::class
-);
+        $middleware->web(append: [
+            RestrictPlusFeatures::class,
+            HandleDemoMode::class,
+            ForceHttps::class,
+        ]);
 
-$app->singleton(
-    Illuminate\Contracts\Debug\ExceptionHandler::class,
-    App\Exceptions\Handler::class
-);
+        $middleware->alias([
+            'audio.auth' => AuthenticateAudioRequests::class,
+            'os.auth' => ObjectStorageAuthenticate::class,
+            'embeds.enabled' => EnsureEmbedsEnabled::class,
+        ]);
 
-/*
-|--------------------------------------------------------------------------
-| Return The Application
-|--------------------------------------------------------------------------
-|
-| This script returns the application instance. The instance is given to
-| the calling script so we can separate the building of the instances
-| from the actual running of the application and sending responses.
-|
-*/
+        // Koel is an SPA without a `login` route, so the Authenticate middleware would otherwise
+        // throw RouteNotFoundException when it tries to resolve route('login') on guest requests.
+        $middleware->redirectGuestsTo('/');
+    })
+    ->withExceptions(static function (Exceptions $exceptions): void {
+        $exceptions->render(static function (
+            AuthenticationException $e,
+            Request $request,
+        ): JsonResponse|RedirectResponse {
+            if ($request->expectsJson()) {
+                return response()->json(['error' => 'Unauthenticated.'], 401);
+            }
 
-return $app;
+            return redirect()->guest('/');
+        });
+
+        // @mago-ignore lint:prefer-first-class-callable (Laravel reflects on the closure's parameter
+        // types to decide which exceptions this renderer applies to)
+        $exceptions->render(
+            static fn (Throwable $e, Request $request): ?SymfonyResponse => SubsonicAwareErrorRenderer::render(
+                $e,
+                $request,
+            ),
+        );
+
+        // Surface Subsonic clients hitting unmapped routes so we can implement missing endpoints.
+        // NotFoundHttpException is normally on Laravel's internalDontReport list.
+        $exceptions->reportable(static function (NotFoundHttpException $e): bool {
+            if (request()->is('rest/*')) {
+                Log::error('Missing Subsonic route: ' . $e->getMessage(), ['exception' => $e]);
+            }
+
+            return false;
+        });
+    })
+    ->create();

@@ -1,71 +1,96 @@
-import { expect, it } from 'vitest'
-import factory from '@/__tests__/factory'
-import UnitTestCase from '@/__tests__/UnitTestCase'
-import { http } from '@/services'
-import { albumStore, artistStore, overviewStore, recentlyPlayedStore, songStore } from '.'
+import { describe, expect, it } from 'vite-plus/test'
+import { createHarness } from '@/__tests__/TestHarness'
+import { http } from '@/services/http'
+import { albumStore } from '@/stores/albumStore'
+import { artistStore } from '@/stores/artistStore'
+import { overviewStore } from '@/stores/overviewStore'
+import { recentlyPlayedStore } from '@/stores/recentlyPlayedStore'
+import { playableStore } from '@/stores/playableStore'
 
-new class extends UnitTestCase {
-  protected beforeEach () {
-    super.beforeEach(() => {
+describe('overviewStore', () => {
+  const h = createHarness({
+    beforeEach: () => {
       overviewStore.state = {
         recentlyPlayed: [],
         recentlyAddedSongs: [],
         recentlyAddedAlbums: [],
+        recentlyAddedArtists: [],
         mostPlayedSongs: [],
         mostPlayedAlbums: [],
-        mostPlayedArtists: []
+        mostPlayedArtists: [],
+        leastPlayedSongs: [],
+        randomAlbums: [],
+        randomArtists: [],
+        randomSongs: [],
+        similarSongs: [],
       }
+    },
+  })
+
+  it('initializes the store', async () => {
+    const songSyncMock = h.mock(playableStore, 'syncWithVault')
+    const albumSyncMock = h.mock(albumStore, 'syncWithVault')
+    const artistSyncMock = h.mock(artistStore, 'syncWithVault')
+    const refreshMock = h.mock(overviewStore, 'refreshPlayStats')
+
+    const mostPlayedSongs = h.factory('song').make(6)
+    const mostPlayedAlbums = h.factory('album').make(6)
+    const mostPlayedArtists = h.factory('artist').make(6)
+    const randomAlbums = h.factory('album').make(15)
+    const randomArtists = h.factory('artist').make(15)
+    const recentlyAddedSongs = h.factory('song').make(6)
+    const recentlyAddedAlbums = h.factory('album').make(6)
+    const recentlyAddedArtists = h.factory('artist').make(6)
+    const recentlyPlayedSongs = h.factory('song').make(6)
+    const leastPlayedSongs = h.factory('song').make(6)
+    const randomSongs = h.factory('song').make(6)
+    const similarSongs = h.factory('song').make(6)
+
+    const getMock = h.mock(http, 'get').mockResolvedValueOnce({
+      most_played_songs: mostPlayedSongs,
+      most_played_albums: mostPlayedAlbums,
+      most_played_artists: mostPlayedArtists,
+      random_albums: randomAlbums,
+      random_artists: randomArtists,
+      recently_added_songs: recentlyAddedSongs,
+      recently_added_albums: recentlyAddedAlbums,
+      recently_added_artists: recentlyAddedArtists,
+      recently_played_songs: recentlyPlayedSongs,
+      least_played_songs: leastPlayedSongs,
+      random_songs: randomSongs,
+      similar_songs: similarSongs,
     })
-  }
 
-  protected test () {
-    it('initializes the store', async () => {
-      const songSyncMock = this.mock(songStore, 'syncWithVault')
-      const albumSyncMock = this.mock(albumStore, 'syncWithVault')
-      const artistSyncMock = this.mock(artistStore, 'syncWithVault')
-      const refreshMock = this.mock(overviewStore, 'refresh')
+    await overviewStore.fetch()
 
-      const mostPlayedSongs = factory<Song>('song', 7)
-      const mostPlayedAlbums = factory<Album>('album', 6)
-      const mostPlayedArtists = factory<Artist>('artist', 6)
-      const recentlyAddedSongs = factory<Song>('song', 9)
-      const recentlyAddedAlbums = factory<Album>('album', 6)
-      const recentlyPlayedSongs = factory<Song>('song', 9)
+    expect(getMock).toHaveBeenCalledWith('overview')
+    expect(songSyncMock).toHaveBeenNthCalledWith(1, mostPlayedSongs)
+    expect(songSyncMock).toHaveBeenNthCalledWith(2, recentlyAddedSongs)
+    expect(songSyncMock).toHaveBeenNthCalledWith(3, leastPlayedSongs)
+    expect(songSyncMock).toHaveBeenNthCalledWith(4, randomSongs)
+    expect(songSyncMock).toHaveBeenNthCalledWith(5, similarSongs)
+    expect(songSyncMock).toHaveBeenNthCalledWith(6, recentlyPlayedSongs)
+    expect(albumSyncMock).toHaveBeenNthCalledWith(1, mostPlayedAlbums)
+    expect(albumSyncMock).toHaveBeenNthCalledWith(2, randomAlbums)
+    expect(albumSyncMock).toHaveBeenNthCalledWith(3, recentlyAddedAlbums)
+    expect(artistSyncMock).toHaveBeenNthCalledWith(1, mostPlayedArtists)
+    expect(artistSyncMock).toHaveBeenNthCalledWith(2, randomArtists)
+    expect(artistSyncMock).toHaveBeenNthCalledWith(3, recentlyAddedArtists)
+    expect(refreshMock).toHaveBeenCalled()
+  })
 
-      const getMock = this.mock(http, 'get').mockResolvedValueOnce({
-        most_played_songs: mostPlayedSongs,
-        most_played_albums: mostPlayedAlbums,
-        most_played_artists: mostPlayedArtists,
-        recently_added_songs: recentlyAddedSongs,
-        recently_added_albums: recentlyAddedAlbums,
-        recently_played_songs: recentlyPlayedSongs
-      })
+  it('refreshes the store', () => {
+    const mostPlayedSongs = h.factory('song').make(6)
+    const recentlyPlayedSongs = h.factory('song').make(6)
 
-      await overviewStore.init()
+    const mostPlayedSongsMock = h.mock(playableStore, 'getMostPlayedSongs', mostPlayedSongs)
+    recentlyPlayedStore.excerptState.playables = recentlyPlayedSongs
 
-      expect(getMock).toHaveBeenCalledWith('overview')
-      expect(songSyncMock).toHaveBeenNthCalledWith(1, mostPlayedSongs)
-      expect(songSyncMock).toHaveBeenNthCalledWith(2, recentlyAddedSongs)
-      expect(songSyncMock).toHaveBeenNthCalledWith(3, recentlyPlayedSongs)
-      expect(albumSyncMock).toHaveBeenNthCalledWith(1, recentlyAddedAlbums)
-      expect(albumSyncMock).toHaveBeenNthCalledWith(2, mostPlayedAlbums)
-      expect(artistSyncMock).toHaveBeenCalledWith(mostPlayedArtists)
-      expect(refreshMock).toHaveBeenCalled()
-    })
+    overviewStore.refreshPlayStats()
 
-    it('refreshes the store', () => {
-      const mostPlayedSongs = factory<Song>('song', 7)
-      const recentlyPlayedSongs = factory<Song>('song', 9)
+    expect(mostPlayedSongsMock).toHaveBeenCalled()
 
-      const mostPlayedSongsMock = this.mock(songStore, 'getMostPlayed', mostPlayedSongs)
-      recentlyPlayedStore.excerptState.songs = recentlyPlayedSongs
-
-      overviewStore.refresh()
-
-      expect(mostPlayedSongsMock).toHaveBeenCalled()
-
-      expect(overviewStore.state.recentlyPlayed).toEqual(recentlyPlayedSongs)
-      expect(overviewStore.state.mostPlayedSongs).toEqual(mostPlayedSongs)
-    })
-  }
-}
+    expect(overviewStore.state.recentlyPlayed).toEqual(recentlyPlayedSongs)
+    expect(overviewStore.state.mostPlayedSongs).toEqual(mostPlayedSongs)
+  })
+})

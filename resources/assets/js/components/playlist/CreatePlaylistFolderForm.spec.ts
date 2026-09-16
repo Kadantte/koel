@@ -1,22 +1,34 @@
-import { expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 import { screen } from '@testing-library/vue'
-import UnitTestCase from '@/__tests__/UnitTestCase'
-import { playlistFolderStore } from '@/stores'
-import factory from '@/__tests__/factory'
-import CreatePlaylistFolderForm from './CreatePlaylistFolderForm.vue'
+import { createHarness } from '@/__tests__/TestHarness'
+import { playlistFolderStore } from '@/stores/playlistFolderStore'
+import Component from './CreatePlaylistFolderForm.vue'
 
-new class extends UnitTestCase {
-  protected test () {
-    it('submits', async () => {
-      const storeMock = this.mock(playlistFolderStore, 'store')
-        .mockResolvedValue(factory<PlaylistFolder>('playlist-folder'))
+describe('createPlaylistFolderForm.vue', () => {
+  const h = createHarness()
 
-      this.render(CreatePlaylistFolderForm)
+  it('submits', async () => {
+    const storeMock = h.mock(playlistFolderStore, 'store').mockResolvedValue(h.factory('playlist-folder').make())
 
-      await this.type(screen.getByPlaceholderText('Folder name'), 'My folder')
-      await this.user.click(screen.getByRole('button', { name: 'Save' }))
+    h.render(Component)
 
-      expect(storeMock).toHaveBeenCalledWith('My folder')
+    await h.type(screen.getByPlaceholderText('Folder name'), 'My folder')
+    await h.user.click(screen.getByRole('button', { name: 'Save' }))
+
+    expect(storeMock).toHaveBeenCalledWith('My folder')
+  })
+
+  it('creates a folder under the provided parent', async () => {
+    const parent = h.factory('playlist-folder').make()
+    const storeMock = h.mock(playlistFolderStore, 'store').mockResolvedValue(h.factory('playlist-folder').make())
+
+    h.render(Component, {
+      props: { parent },
     })
-  }
-}
+
+    await h.type(screen.getByPlaceholderText('Folder name'), 'Child folder')
+    await h.user.click(screen.getByRole('button', { name: 'Save' }))
+
+    expect(storeMock).toHaveBeenCalledWith('Child folder', parent)
+  })
+})

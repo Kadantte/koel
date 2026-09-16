@@ -1,31 +1,58 @@
 import factory from 'factoria'
-import artistFactory, { states as artistStates } from '@/__tests__/factory/artistFactory'
-import songFactory, { states as songStates } from '@/__tests__/factory/songFactory'
-import albumFactory, { states as albumStates } from '@/__tests__/factory/albumFactory'
-import interactionFactory from '@/__tests__/factory/interactionFactory'
-import smartPlaylistRuleFactory from '@/__tests__/factory/smartPlaylistRuleFactory'
-import smartPlaylistRuleGroupFactory from '@/__tests__/factory/smartPlaylistRuleGroupFactory'
-import playlistFactory, { states as playlistStates } from '@/__tests__/factory/playlistFactory'
-import playlistFolderFactory from '@/__tests__/factory/playlistFolderFactory'
-import userFactory, { states as userStates } from '@/__tests__/factory/userFactory'
-import albumTrackFactory from '@/__tests__/factory/albumTrackFactory'
-import albumInfoFactory from '@/__tests__/factory/albumInfoFactory'
-import artistInfoFactory from '@/__tests__/factory/artistInfoFactory'
-import youTubeVideoFactory from '@/__tests__/factory/youTubeVideoFactory'
-import genreFactory from '@/__tests__/factory/genreFactory'
+import type { Factoria } from 'factoria'
+
+declare module 'factoria' {
+  namespace Factoria {
+    interface ModelRegistry {
+      album: Album
+      'album-info': AlbumInfo
+      'album-track': AlbumTrack
+      artist: Artist
+      'artist-info': ArtistInfo
+      embed: Embed
+      episode: Episode
+      favorite: Favorite
+      folder: Folder
+      genre: Genre
+      interaction: Interaction
+      'live-event': LiveEvent
+      playlist: Playlist
+      'playlist-collaborator': PlaylistCollaborator
+      'playlist-folder': PlaylistFolder
+      podcast: Podcast
+      'radio-station': RadioStation
+      'smart-playlist-rule': SmartPlaylistRule
+      'smart-playlist-rule-group': SmartPlaylistRuleGroup
+      song: Song
+      theme: Theme
+      user: User
+      'you-tube-video': YouTubeVideo
+    }
+  }
+}
+
+// Distributed pair: [model name, key of that model]. Lets `it.each` narrow the
+// second tuple element to actual fields of the first.
+export type ModelFieldPair = {
+  [K in keyof Factoria.ModelRegistry]: [K, keyof Factoria.ModelRegistry[K] & string]
+}[keyof Factoria.ModelRegistry]
+
+// Dynamically import and register all factory modules
+const factoryModules = import.meta.glob('@/__tests__/factory/*Factory.ts', { eager: true })
+
+for (const [path, mod] of Object.entries(factoryModules)) {
+  const match = path.match(/\/([^/]+)Factory\.ts$/)
+  if (!match) {
+    continue
+  }
+
+  const base = match[1]
+  const modelName = base.replace(/[A-Z]/g, m => `-${m.toLowerCase()}`).replace(/^-/, '')
+
+  const factoryFn = (mod as any).default
+  const states = (mod as any).states
+
+  factory.define(modelName, factoryFn, states)
+}
 
 export default factory
-  .define('artist', faker => artistFactory(faker), artistStates)
-  .define('artist-info', faker => artistInfoFactory(faker))
-  .define('album', faker => albumFactory(faker), albumStates)
-  .define('album-track', faker => albumTrackFactory(faker))
-  .define('album-info', faker => albumInfoFactory(faker))
-  .define('song', faker => songFactory(faker), songStates)
-  .define('interaction', faker => interactionFactory(faker))
-  .define('genre', faker => genreFactory(faker))
-  .define('video', faker => youTubeVideoFactory(faker))
-  .define('smart-playlist-rule', faker => smartPlaylistRuleFactory(faker))
-  .define('smart-playlist-rule-group', faker => smartPlaylistRuleGroupFactory(faker))
-  .define('playlist', faker => playlistFactory(faker), playlistStates)
-  .define('playlist-folder', faker => playlistFolderFactory(faker))
-  .define('user', faker => userFactory(faker), userStates)

@@ -2,101 +2,113 @@
 
 namespace App\Services;
 
-use App\Models\Album;
-use App\Models\Artist;
-use App\Models\Playlist;
+use App\Enums\DownloadableType;
+use App\Exceptions\DownloadLimitExceededException;
 use App\Models\Song;
-use App\Models\SongZipArchive;
-use Illuminate\Database\Eloquent\Collection as EloquentCollection;
-use Illuminate\Support\Collection;
-use InvalidArgumentException;
+use App\Models\User;
+use App\Repositories\SongRepository;
+use App\Services\Network\SafeHttp;
+use App\Services\SongStorages\CloudStorage;
+use App\Services\SongStorages\SongStorageFactory;
+use App\Values\Downloadable;
+use App\Values\Podcast\EpisodePlayable;
+use App\Values\SongZipArchive;
+use Illuminate\Container\Attributes\Config;
+use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Support\Facades\File;
 
 class DownloadService
 {
-    public function __construct(private S3Service $s3Service)
-    {
+    public function __construct(
+        private readonly SongRepository $songRepository,
+        private readonly SafeHttp $http,
+        #[Config('koel.download.limit')]
+        private readonly int $downloadLimit = 0,
+    ) {}
+
+    /**
+     * @throws DownloadLimitExceededException
+     */
+    public function assertWithinDownloadLimit(
+        DownloadableType $type,
+        User $user,
+        array|string|int|null $id = null,
+    ): void {
+        if ($this->downloadLimit === 0) {
+            return;
+        }
+
+        $count = match ($type) {
+            DownloadableType::Songs => count((array) $id),
+            DownloadableType::Album => $this->songRepository->getByAlbum($id, $user)->count(),
+            DownloadableType::Artist => $this->songRepository->getByArtist($id, $user)->count(),
+            DownloadableType::Playlist => $this->songRepository->getByPlaylist($id, $user)->count(),
+            DownloadableType::Favorites => $this->songRepository->getFavorites($user)->count(),
+        };
+
+        $this->assertWithinLimit($count);
     }
 
     /**
-     * Generic method to generate a download archive from various source types.
-     *
-     * @return string Full path to the generated archive
+     * @param Collection<Song>|array<array-key, Song> $songs
      */
-    public function from(Playlist|Song|Album|Artist|Collection $downloadable): string
+    public function getDownloadable(Collection $songs): ?Downloadable
     {
-        switch (get_class($downloadable)) {
-            case Song::class:
-                return $this->fromSong($downloadable);
+        $this->assertWithinLimit($songs->count());
 
-            case Collection::class:
-            case EloquentCollection::class:
-                return $this->fromMultipleSongs($downloadable);
-
-            case Album::class:
-                return $this->fromAlbum($downloadable);
-
-            case Artist::class:
-                return $this->fromArtist($downloadable);
-
-            case Playlist::class:
-                return $this->fromPlaylist($downloadable);
-        }
-
-        throw new InvalidArgumentException('Unsupported download type.');
-    }
-
-    public function fromSong(Song $song): string
-    {
-        if ($song->s3_params) {
-            // The song is hosted on Amazon S3.
-            // We download it back to our local server first.
-            $url = $this->s3Service->getSongPublicUrl($song);
-            abort_unless((bool) $url, 404);
-
-            $localPath = sys_get_temp_dir() . DIRECTORY_SEPARATOR . basename($song->s3_params['key']);
-
-            // The following function requires allow_url_fopen to be ON.
-            // We're just assuming that to be the case here.
-            copy($url, $localPath);
-        } else {
-            // The song is hosted locally. Make sure the file exists.
-            $localPath = $song->path;
-            abort_unless(file_exists($localPath), 404);
-        }
-
-        return $localPath;
-    }
-
-    private function fromMultipleSongs(Collection $songs): string
-    {
         if ($songs->count() === 1) {
-            return $this->fromSong($songs->first());
+            return optional(
+                $this->getLocalPathOrDownloadableUrl($songs->first()), // @phpstan-ignore-line
+                Downloadable::make(...),
+            );
         }
 
-        return (new SongZipArchive())
-            ->addSongs($songs)
-            ->finish()
-            ->getPath();
+        return Downloadable::make(
+            (new SongZipArchive())
+                ->addSongs($songs)
+                ->finish()
+                ->getPath(),
+        );
     }
 
-    private function fromPlaylist(Playlist $playlist): string
+    private function assertWithinLimit(int $count): void
     {
-        return $this->fromMultipleSongs($playlist->songs);
+        throw_if(
+            $this->downloadLimit > 0 && $count > $this->downloadLimit,
+            new DownloadLimitExceededException($this->downloadLimit),
+        );
     }
 
-    private function fromAlbum(Album $album): string
+    public function getLocalPathOrDownloadableUrl(Song $song): ?string
     {
-        return $this->fromMultipleSongs($album->songs);
+        if (!$song->storage->supported()) {
+            return null;
+        }
+
+        if ($song->isEpisode()) {
+            // If the song is an episode, get the episode's media URL ("path").
+            return $song->path;
+        }
+
+        $storage = SongStorageFactory::make($song->storage);
+
+        return $storage instanceof CloudStorage
+            ? $storage->getPresignedUrl($song->storage_metadata->getPath())
+            : $storage->getLocalPath($song->path);
     }
 
-    public function fromArtist(Artist $artist): string
+    public function getLocalPath(Song $song): ?string
     {
-        // We cater to the case where the artist is an "album artist," which means she has songs through albums as well.
-        $songs = $artist->albums->reduce(
-            static fn (Collection $songs, Album $album) => $songs->merge($album->songs),
-            $artist->songs
-        )->unique('id');
+        if (!$song->storage->supported()) {
+            return null;
+        }
 
-        return $this->fromMultipleSongs($songs);
+        if ($song->isEpisode()) {
+            return EpisodePlayable::getForEpisode($song, $this->http)->path;
+        }
+
+        $localPath = SongStorageFactory::make($song->storage)->getLocalPath($song->path);
+
+        return File::exists($localPath) ? $localPath : null;
     }
 }

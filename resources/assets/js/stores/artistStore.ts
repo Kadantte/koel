@@ -1,78 +1,121 @@
-import { reactive, UnwrapNestedRefs } from 'vue'
-import { differenceBy, unionBy } from 'lodash'
-import { cache, http } from '@/services'
-import { arrayify, logger } from '@/utils'
+import type { Reactive } from 'vue'
+import { reactive } from 'vue'
+import { differenceBy, unionBy } from 'lodash-es'
+import { cache } from '@/services/cache'
+import { http } from '@/services/http'
+import { flattenParams } from '@/utils/helpers'
+import { logger } from '@/utils/logger'
+import { useVault } from '@/composables/useVault'
+import { playableStore as songStore } from '@/stores/playableStore'
 
-const UNKNOWN_ARTIST_ID = 1
-const VARIOUS_ARTISTS_ID = 2
+const UNKNOWN_ARTIST_NAME = 'Unknown Artist'
+const VARIOUS_ARTISTS_NAME = 'Various Artists'
+
+export interface ArtistUpdateData {
+  name: Artist['name']
+  image?: Artist['image'] | null
+}
+
+interface ArtistListPaginateParams extends CursorPaginateParams<ArtistListSortField> {
+  favorites_only: boolean
+}
 
 export const artistStore = {
-  vault: new Map<number, UnwrapNestedRefs<Artist>>(),
+  ...useVault<Artist>(),
 
   state: reactive({
-    artists: [] as Artist[]
+    artists: [] as Artist[],
   }),
 
-  byId (id: number) {
-    return this.vault.get(id)
-  },
-
-  removeByIds (ids: number[]) {
-    this.state.artists = differenceBy(this.state.artists, ids.map(id => this.byId(id)), 'id')
+  removeByIds(ids: Artist['id'][]) {
+    this.state.artists = differenceBy(
+      this.state.artists,
+      ids.map(id => this.byId(id)),
+      'id',
+    )
     ids.forEach(id => this.vault.delete(id))
   },
 
-  isVarious: (artist: Artist | number) => (typeof artist === 'number')
-    ? artist === VARIOUS_ARTISTS_ID
-    : artist.id === VARIOUS_ARTISTS_ID,
+  isVarious: (artist: Artist | Artist['name']) =>
+    typeof artist === 'string' ? artist === VARIOUS_ARTISTS_NAME : artist.name === VARIOUS_ARTISTS_NAME,
 
-  isUnknown: (artist: Artist | number) => (typeof artist === 'number')
-    ? artist === UNKNOWN_ARTIST_ID
-    : artist.id === UNKNOWN_ARTIST_ID,
+  isUnknown: (artist: Artist | Artist['name']) =>
+    typeof artist === 'string' ? artist === UNKNOWN_ARTIST_NAME : artist.name === UNKNOWN_ARTIST_NAME,
 
-  isStandard (artist: Artist | number) {
+  isStandard(artist: Artist | Artist['name']) {
     return !this.isVarious(artist) && !this.isUnknown(artist)
   },
 
-  async uploadImage (artist: Artist, image: string) {
-    artist.image = (await http.put<{ imageUrl: string }>(`artist/${artist.id}/image`, { image })).imageUrl
-
-    // sync to vault
-    this.byId(artist.id)!.image = artist.image
-
-    return artist.image
+  async update(artist: Artist, data: ArtistUpdateData) {
+    const updated = await http.put<Artist>(`artists/${artist.id}`, data)
+    this.state.artists = unionBy(this.state.artists, this.syncWithVault(updated), 'id')
+    songStore.syncArtistProperties(updated)
   },
 
-  syncWithVault (artists: Artist | Artist[]) {
-    return arrayify(artists).map(artist => {
-      let local = this.vault.get(artist.id)
-      local = local ? Object.assign(local, artist) : reactive(artist)
-      this.vault.set(artist.id, local)
-
-      return local
-    })
-  },
-
-  async resolve (id: number) {
+  async resolve(id: Artist['id']) {
     let artist = this.byId(id)
 
     if (!artist) {
       try {
         artist = this.syncWithVault(
-          await cache.remember<Artist>(['artist', id], async () => await http.get<Artist>(`artists/${id}`))
+          await cache.remember(['artist', id], async () => await http.get<Artist>(`artists/${id}`)),
         )[0]
-      } catch (e) {
-        logger.error(e)
+      } catch (error: unknown) {
+        logger.error(error)
       }
     }
 
     return artist
   },
 
-  async paginate (page: number) {
-    const resource = await http.get<PaginatorResource>(`artists?page=${page}`)
+  async paginate(params: ArtistListPaginateParams) {
+    const query = new URLSearchParams(flattenParams(params))
+    query.set('cursor', params.cursor ?? '')
+
+    const resource = await http.get<CursorPaginatorResource<Artist>>(`artists?${query}`)
     this.state.artists = unionBy(this.state.artists, this.syncWithVault(resource.data), 'id')
 
-    return resource.links.next ? ++resource.meta.current_page : null
-  }
+    return resource.meta.next_cursor
+  },
+
+  reset() {
+    this.vault.clear()
+    this.state.artists = []
+  },
+
+  async toggleFavorite(artist: Reactive<Artist>) {
+    // Don't wait for the HTTP response to update the status, just toggle right away.
+    // We'll update the liked status again after the HTTP request.
+    artist.favorite = !artist.favorite
+
+    const favorite = await http.post<Favorite | null>(`favorites/toggle`, {
+      type: 'artist',
+      id: artist.id,
+    })
+
+    artist.favorite = Boolean(favorite)
+  },
+
+  async rate(artist: Reactive<Artist>, rating: number) {
+    const previous = artist.rating
+    artist.rating = rating
+
+    try {
+      const updated = await http.put<Artist>(`artists/${artist.id}/rating`, { rating })
+
+      if (artist.rating === rating) {
+        artist.rating = updated.rating
+      }
+    } catch (error) {
+      if (artist.rating === rating) {
+        artist.rating = previous
+      }
+
+      throw error
+    }
+  },
+
+  async fetchEvents(artist: Artist) {
+    return await http.get<LiveEvent[]>(`artists/${artist.id}/events`)
+  },
 }

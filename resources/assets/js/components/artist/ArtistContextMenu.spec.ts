@@ -1,93 +1,136 @@
-import { expect, it } from 'vitest'
-import UnitTestCase from '@/__tests__/UnitTestCase'
-import factory from '@/__tests__/factory'
-import { eventBus } from '@/utils'
-import { downloadService, playbackService } from '@/services'
-import { commonStore, songStore } from '@/stores'
-import ArtistContextMenu from './ArtistContextMenu.vue'
+import { describe, expect, it, vi } from 'vite-plus/test'
 import { screen } from '@testing-library/vue'
+import { shallowRef } from 'vue'
+import { createHarness } from '@/__tests__/TestHarness'
+import { assertOpenModal } from '@/__tests__/assertions'
+import factory from '@/__tests__/factory'
+import { ContextMenuKey } from '@/config/symbols'
+import { downloadService } from '@/services/downloadService'
+import { playbackService } from '@/services/QueuePlaybackService'
+import { artistStore } from '@/stores/artistStore'
+import { commonStore } from '@/stores/commonStore'
+import { playableStore } from '@/stores/playableStore'
+import CreateEmbedForm from '@/components/embed/CreateEmbedForm.vue'
 
-let artist: Artist
+const openModalMock = vi.fn()
 
-new class extends UnitTestCase {
-  private async renderComponent (_artist?: Artist) {
-    artist = _artist || factory<Artist>('artist', {
-      name: 'Accept'
+vi.mock('@/composables/useModal', () => ({
+  useModal: () => ({
+    openModal: openModalMock,
+  }),
+}))
+
+import Component from './ArtistContextMenu.vue'
+
+describe('artistContextMenu.vue', () => {
+  const h = createHarness({
+    beforeEach: () => openModalMock.mockClear(),
+  })
+
+  const renderComponent = async (artist?: Artist) => {
+    artist =
+      artist ||
+      h.factory('artist').make({
+        name: 'Accept',
+        favorite: false,
+        permissions: { edit: true },
+      })
+
+    const rendered = h.render(Component, {
+      props: {
+        artist,
+      },
     })
 
-    const rendered = this.render(ArtistContextMenu)
-    eventBus.emit('ARTIST_CONTEXT_MENU_REQUESTED', { pageX: 420, pageY: 42 }, artist)
-    await this.tick(2)
-
-    return rendered
+    return {
+      ...rendered,
+      artist,
+    }
   }
 
-  protected test () {
-    it('renders', async () => expect((await this.renderComponent()).html()).toMatchSnapshot())
+  it('plays all', async () => {
+    h.createAudioPlayer()
 
-    it('plays all', async () => {
-      const songs = factory<Song>('song', 10)
-      const fetchMock = this.mock(songStore, 'fetchForArtist').mockResolvedValue(songs)
-      const playMock = this.mock(playbackService, 'queueAndPlay')
+    const songs = h.factory('song').make(10)
+    const fetchMock = h.mock(playableStore, 'fetchSongsForArtist').mockResolvedValue(songs)
+    const playMock = h.mock(playbackService, 'queueAndPlay')
 
-      await this.renderComponent()
-      await screen.getByText('Play All').click()
-      await this.tick()
+    const { artist } = await renderComponent()
+    await screen.getByText('Play All').click()
+    await h.tick()
 
-      expect(fetchMock).toHaveBeenCalledWith(artist)
-      expect(playMock).toHaveBeenCalledWith(songs)
+    expect(fetchMock).toHaveBeenCalledWith(artist)
+    expect(playMock).toHaveBeenCalledWith(songs)
+  })
+
+  it('shuffles all', async () => {
+    h.createAudioPlayer()
+
+    const songs = h.factory('song').make(10)
+    const fetchMock = h.mock(playableStore, 'fetchSongsForArtist').mockResolvedValue(songs)
+    const playMock = h.mock(playbackService, 'queueAndPlay')
+
+    const { artist } = await renderComponent()
+    await screen.getByText('Shuffle All').click()
+    await h.tick()
+
+    expect(fetchMock).toHaveBeenCalledWith(artist)
+    expect(playMock).toHaveBeenCalledWith(songs, true)
+  })
+
+  it('downloads', async () => {
+    const mock = h.mock(downloadService, 'fromArtist')
+
+    const { artist } = await renderComponent()
+    await screen.getByText('Download').click()
+
+    expect(mock).toHaveBeenCalledWith(artist)
+  })
+
+  it('does not have an option to download if downloading is disabled', async () => {
+    commonStore.state.allows_download = false
+    await renderComponent()
+
+    expect(screen.queryByText('Download')).toBeNull()
+  })
+
+  it('does not have an option to download Unknown Artist', async () => {
+    await renderComponent(factory('artist').state('unknown').make())
+
+    expect(screen.queryByText('Download')).toBeNull()
+  })
+
+  it('does not have an option to download Various Artist', async () => {
+    await renderComponent(factory('artist').state('various').make())
+    expect(screen.queryByText('Download')).toBeNull()
+  })
+
+  it('requests the embed form', async () => {
+    const { artist } = await renderComponent()
+    await h.user.click(screen.getByText('Embed…'))
+
+    await assertOpenModal(openModalMock, CreateEmbedForm, { embeddable: artist })
+  })
+
+  it('does not have an option to embed when embedding is disabled', async () => {
+    commonStore.state.allows_embedding = false
+    await renderComponent()
+
+    expect(screen.queryByText('Embed…')).toBeNull()
+  })
+
+  it('closes the menu after rating', async () => {
+    h.mock(artistStore, 'rate')
+    const menu = shallowRef<any>({ component: Component, position: { top: 0, left: 0 } })
+    const artist = h.factory('artist').make({ rating: 0 })
+
+    h.render(Component, {
+      props: { artist },
+      global: { provide: { [ContextMenuKey as symbol]: menu } },
     })
 
-    it('shuffles all', async () => {
-      const songs = factory<Song>('song', 10)
-      const fetchMock = this.mock(songStore, 'fetchForArtist').mockResolvedValue(songs)
-      const playMock = this.mock(playbackService, 'queueAndPlay')
+    await h.user.click(screen.getByRole('radio', { name: 'Rate 4 of 5' }))
 
-      await this.renderComponent()
-      await screen.getByText('Shuffle All').click()
-      await this.tick()
-
-      expect(fetchMock).toHaveBeenCalledWith(artist)
-      expect(playMock).toHaveBeenCalledWith(songs, true)
-    })
-
-    it('downloads', async () => {
-      const mock = this.mock(downloadService, 'fromArtist')
-
-      await this.renderComponent()
-      await screen.getByText('Download').click()
-
-      expect(mock).toHaveBeenCalledWith(artist)
-    })
-
-    it('does not have an option to download if downloading is disabled', async () => {
-      commonStore.state.allow_download = false
-      await this.renderComponent()
-
-      expect(screen.queryByText('Download')).toBeNull()
-    })
-
-    it('goes to artist', async () => {
-      const mock = this.mock(this.router, 'go')
-      await this.renderComponent()
-
-      await screen.getByText('Go to Artist').click()
-
-      expect(mock).toHaveBeenCalledWith(`artist/${artist.id}`)
-    })
-
-    it('does not have an option to download or go to Unknown Artist', async () => {
-      await this.renderComponent(factory.states('unknown')<Artist>('artist'))
-
-      expect(screen.queryByText('Go to Artist')).toBeNull()
-      expect(screen.queryByText('Download')).toBeNull()
-    })
-
-    it('does not have an option to download or go to Various Artist', async () => {
-      await this.renderComponent(factory.states('various')<Artist>('artist'))
-
-      expect(screen.queryByText('Go to Artist')).toBeNull()
-      expect(screen.queryByText('Download')).toBeNull()
-    })
-  }
-}
+    expect(menu.value.component).toBeNull()
+  })
+})

@@ -1,41 +1,42 @@
-import { ref } from 'vue'
+import type { Ref } from 'vue'
+import { onBeforeUnmount, ref, watch } from 'vue'
+
 import ToTopButton from '@/components/ui/BtnScrollToTop.vue'
 
-export const useInfiniteScroll = (loadMore: Closure) => {
-  const scroller = ref<HTMLElement>()
+export const useInfiniteScroll = (container: Ref<HTMLElement | undefined>, loadMore: Closure) => {
+  const sentinel = ref<HTMLElement>()
+  let observer: IntersectionObserver | undefined
 
-  const scrolling = (event: UIEvent) => {
-    const target = event.target as HTMLElement
+  watch(
+    sentinel,
+    (el, _, onCleanup) => {
+      if (!el) {
+        return
+      }
 
-    // Here we check if the user has scrolled to the end of the wrapper (or 32px to the end).
-    // If that's true, load more items.
-    if (target.scrollTop + target.clientHeight >= target.scrollHeight - 32) {
-      loadMore()
-    }
-  }
+      observer = new IntersectionObserver(
+        entries => {
+          if (entries[0].isIntersecting) {
+            loadMore()
+          }
+        },
+        {
+          root: container.value,
+          rootMargin: '100px',
+        },
+      )
 
-  let tries = 0
-  const MAX_TRIES = 5
+      observer.observe(el)
 
-  const makeScrollable = async () => {
-    const container = scroller.value
+      onCleanup(() => observer?.disconnect())
+    },
+    { flush: 'post' },
+  )
 
-    if (!container) {
-      window.setTimeout(() => makeScrollable(), 200)
-      return
-    }
-
-    if (container.scrollHeight <= container.clientHeight && tries < MAX_TRIES) {
-      tries++
-      await loadMore()
-      window.setTimeout(() => makeScrollable(), 200)
-    }
-  }
+  onBeforeUnmount(() => observer?.disconnect())
 
   return {
     ToTopButton,
-    scroller,
-    scrolling,
-    makeScrollable
+    sentinel,
   }
 }

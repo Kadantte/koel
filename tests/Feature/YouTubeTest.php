@@ -3,9 +3,11 @@
 namespace Tests\Feature;
 
 use App\Models\Song;
-use App\Services\YouTubeService;
+use App\Services\Integrations\YouTubeService;
 use Mockery;
 use Mockery\MockInterface;
+use PHPUnit\Framework\Attributes\Test;
+use Tests\TestCase;
 
 class YouTubeTest extends TestCase
 {
@@ -15,22 +17,16 @@ class YouTubeTest extends TestCase
     {
         parent::setUp();
 
-        $this->youTubeService = self::mock(YouTubeService::class);
+        $this->youTubeService = $this->mock(YouTubeService::class);
     }
 
-    public function testSearchYouTubeVideos(): void
+    #[Test]
+    public function searchYouTubeVideos(): void
     {
-        static::createSampleMediaSet();
+        $song = Song::factory()->createOne();
 
-        /** @var Song $song */
-        $song = Song::query()->first();
+        $this->youTubeService->expects('searchVideosRelatedToSong')->with(Mockery::on($song->is(...)), 'foo');
 
-        $this->youTubeService
-            ->shouldReceive('searchVideosRelatedToSong')
-            ->with(Mockery::on(static fn (Song $retrievedSong) => $song->is($retrievedSong)), 'foo')
-            ->once();
-
-        $this->getAs("/api/youtube/search/song/{$song->id}?pageToken=foo")
-            ->assertOk();
+        $this->getAs("/api/youtube/search/song/{$song->id}?pageToken=foo")->assertOk();
     }
 }

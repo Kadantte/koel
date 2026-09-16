@@ -2,25 +2,32 @@
 
 namespace App\Models;
 
+use Database\Factories\SettingFactory;
+use Illuminate\Database\Eloquent\Attributes\Table;
+use Illuminate\Database\Eloquent\Attributes\Unguarded;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use OwenIt\Auditing\Auditable;
+use OwenIt\Auditing\Contracts\Auditable as AuditableContract;
 
 /**
  * @property string $key
  * @property mixed $value
  *
  * @method static self find(string $key)
+ * @method static SettingFactory factory(...$parameters)
  */
-class Setting extends Model
+#[Table(key: 'key', keyType: 'string', timestamps: false)]
+#[Unguarded]
+class Setting extends Model implements AuditableContract
 {
+    use Auditable;
     use HasFactory;
 
-    protected $primaryKey = 'key';
-    protected $keyType = 'string';
-    public $timestamps = false;
-    protected $guarded = [];
-
-    protected $casts = ['value' => 'json'];
+    protected function casts(): array
+    {
+        return ['value' => 'json'];
+    }
 
     public static function get(string $key): mixed
     {

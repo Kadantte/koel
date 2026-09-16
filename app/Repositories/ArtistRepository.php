@@ -4,55 +4,160 @@ namespace App\Repositories;
 
 use App\Models\Artist;
 use App\Models\User;
-use App\Repositories\Traits\Searchable;
+use App\Repositories\Contracts\PaginationStrategy;
+use App\Repositories\Contracts\ScoutableRepository;
+use Illuminate\Contracts\Pagination\CursorPaginator;
 use Illuminate\Contracts\Pagination\Paginator;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
-use Illuminate\Database\Query\JoinClause;
+use Illuminate\Support\LazyCollection;
 
-class ArtistRepository extends Repository
+/**
+ * @extends Repository<Artist>
+ * @implements ScoutableRepository<Artist>
+ */
+class ArtistRepository extends Repository implements ScoutableRepository
 {
-    use Searchable;
+    /**
+     * @param string $id
+     */
+    public function getOne($id, ?User $user = null): Artist
+    {
+        return Artist::query()
+            ->withUserContext(user: $user ?? $this->auth->user())
+            ->findOrFail($id);
+    }
 
-    /** @return Collection|array<array-key, Artist> */
+    /** @param string $id */
+    public function findOne($id, ?User $user = null): ?Artist
+    {
+        return Artist::query()
+            ->withUserContext(user: $user ?? $this->auth->user())
+            ->find($id);
+    }
+
+    public function getRecentlyAdded(int $count = 6, ?User $user = null): Collection
+    {
+        return Artist::query()
+            ->onlyStandard()
+            ->onlyAlbumArtists()
+            ->withUserContext(user: $user ?? $this->auth->user())
+            ->latest()
+            ->limit($count)
+            ->get();
+    }
+
     public function getMostPlayed(int $count = 6, ?User $user = null): Collection
     {
-        $user ??= auth()->user();
-
         return Artist::query()
-            ->leftJoin('songs', 'artists.id', '=', 'songs.artist_id')
-            ->leftJoin('interactions', static function (JoinClause $join) use ($user): void {
-                $join->on('interactions.song_id', '=', 'songs.id')->where('interactions.user_id', $user->id);
-            })
-            ->groupBy([
-                'artists.id',
-                'play_count',
-                'artists.name',
-                'artists.image',
-                'artists.created_at',
-                'artists.updated_at',
-            ])
-            ->isStandard()
+            ->withUserContext(user: $user ?? $this->auth->user(), includePlayCount: true)
+            ->onlyStandard()
+            ->onlyAlbumArtists()
             ->orderByDesc('play_count')
             ->limit($count)
-            ->get('artists.*');
-    }
-
-    /** @return Collection|array<array-key, Artist> */
-    public function getMany(array $ids, bool $inThatOrder = false): Collection
-    {
-        $artists = Artist::query()
-            ->isStandard()
-            ->whereIn('id', $ids)
             ->get();
-
-        return $inThatOrder ? $artists->orderByArray($ids) : $artists;
     }
 
-    public function paginate(): Paginator
+    /** @return Collection<int, Artist> */
+    public function getRandom(int $limit, ?User $user = null): Collection
     {
         return Artist::query()
-            ->isStandard()
+            ->onlyStandard()
+            ->onlyAlbumArtists()
+            ->withUserContext(user: $user ?? $this->auth->user())
+            ->inRandomOrder()
+            ->limit($limit)
+            ->get();
+    }
+
+    public function getMany(array $ids, bool $preserveOrder = false, ?User $user = null): Collection
+    {
+        $artists = Artist::query()
+            ->onlyStandard()
+            ->withUserContext(user: $user ?? $this->auth->user())
+            ->whereIn('artists.id', $ids)
+            ->get();
+
+        return $preserveOrder ? $artists->orderByArray($ids) : $artists;
+    }
+
+    /** @return Collection<int, Artist> */
+    public function getFavorites(?int $limit = null, int $offset = 0, ?User $user = null): Collection
+    {
+        return Artist::query()
+            ->onlyStandard()
+            ->withUserContext(user: $user ?? $this->auth->user(), favoritesOnly: true)
+            ->orderBy('favorites.position')
+            ->when($offset > 0, static fn (Builder $query) => $query->offset($offset))
+            ->when($limit !== null, static fn (Builder $query) => $query->limit($limit))
+            ->get();
+    }
+
+    /** @return LazyCollection<array-key, Artist> */
+    public function lazyGetWithoutMbid(): LazyCollection
+    {
+        return Artist::query()->onlyStandard()->whereNull('mbid')->lazyById();
+    }
+
+    public function countWithoutMbid(): int
+    {
+        return Artist::query()->onlyStandard()->whereNull('mbid')->count();
+    }
+
+    public function getAll(?User $user = null): Collection
+    {
+        return Artist::query()
+            ->withUserContext(user: $user ?? $this->auth->user())
+            ->onlyStandard()
+            ->onlyAlbumArtists()
+            ->withCount('albums')
             ->orderBy('name')
-            ->simplePaginate(21);
+            ->get();
+    }
+
+    public function paginate(
+        string $sortColumn,
+        string $sortDirection,
+        PaginationStrategy $strategy,
+        bool $favoritesOnly = false,
+        ?User $user = null,
+    ): Paginator|CursorPaginator {
+        return $strategy->apply(
+            Artist::query()
+                ->withUserContext(user: $user ?? $this->auth->user(), favoritesOnly: $favoritesOnly)
+                ->onlyStandard()
+                ->onlyAlbumArtists()
+                ->sort($sortColumn, $sortDirection),
+            idColumn: 'artists.id',
+            perPage: 21,
+        );
+    }
+
+    /** @return Collection<int, Artist> */
+    public function getOrdered(
+        string $sortColumn,
+        string $sortDirection,
+        int $limit,
+        int $offset = 0,
+        ?User $user = null,
+    ): Collection {
+        return Artist::query()
+            ->onlyStandard()
+            ->onlyAlbumArtists()
+            ->withUserContext(user: $user ?? $this->auth->user())
+            ->sort($sortColumn, $sortDirection)
+            ->orderBy('artists.id')
+            ->offset($offset)
+            ->limit($limit)
+            ->get();
+    }
+
+    public function search(string $keywords, int $limit, ?User $user = null): Collection
+    {
+        return $this->getMany(
+            ids: Artist::search($keywords)->take($limit)->get()->modelKeys(),
+            preserveOrder: true,
+            user: $user,
+        );
     }
 }

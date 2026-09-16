@@ -1,58 +1,160 @@
-import { expect, it } from 'vitest'
-import factory from '@/__tests__/factory'
-import UnitTestCase from '@/__tests__/UnitTestCase'
-import { albumStore, commonStore, preferenceStore } from '@/stores'
 import { screen, waitFor } from '@testing-library/vue'
-import AlbumListScreen from './AlbumListScreen.vue'
+import { describe, expect, it } from 'vite-plus/test'
+import { createHarness } from '@/__tests__/TestHarness'
+import { albumStore } from '@/stores/albumStore'
+import { commonStore } from '@/stores/commonStore'
+import { preferenceStore as preferences } from '@/stores/preferenceStore'
+import Component from './AlbumListScreen.vue'
 
-new class extends UnitTestCase {
-  protected beforeEach () {
-    super.beforeEach(() => this.mock(albumStore, 'paginate'))
-  }
+const albumGridStub = {
+  template: '<div data-testid="album-grid"><div v-for="(a, i) in albums" :key="i" data-testid="album-card" /></div>',
+  props: ['albums', 'showReleaseYear'],
+  methods: { scrollToTop() {} },
+}
 
-  private async renderComponent () {
-    albumStore.state.albums = factory<Album>('album', 9)
+const albumTableStub = {
+  template: '<div data-testid="album-table" />',
+  props: ['albums', 'field', 'order'],
+}
 
-    this.render(AlbumListScreen, {
+describe('albumListScreen.vue', () => {
+  const h = createHarness()
+
+  const renderComponent = async () => {
+    const paginateMock = h.mock(albumStore, 'paginate').mockResolvedValueOnce('next-cursor-token')
+    albumStore.state.albums = h.factory('album').make(9)
+
+    const rendered = h.render(Component, {
       global: {
         stubs: {
-          AlbumCard: this.stub('album-card')
-        }
-      }
+          AlbumGrid: albumGridStub,
+          AlbumTable: albumTableStub,
+        },
+      },
     })
 
-    await this.router.activateRoute({ path: 'albums', screen: 'Albums' })
+    await h.tick(2)
+
+    return {
+      rendered,
+      paginateMock,
+    }
   }
 
-  protected test () {
-    it('renders', async () => {
-      await this.renderComponent()
-      expect(screen.getAllByTestId('album-card')).toHaveLength(9)
+  it('renders', async () => {
+    await renderComponent()
+    expect(screen.getAllByTestId('album-card')).toHaveLength(9)
+  })
+
+  it('shows a message when the library is empty', async () => {
+    commonStore.state.song_length = 0
+    await renderComponent()
+
+    await waitFor(() => screen.getByTestId('screen-empty-state'))
+  })
+
+  it('renders the table when the view mode is table', async () => {
+    preferences.temporary.albums_view_mode = 'table'
+    await renderComponent()
+
+    expect(screen.queryByTestId('album-grid')).toBeNull()
+    screen.getByTestId('album-table')
+  })
+
+  it('switches between grid and table via the view mode toggle', async () => {
+    preferences.temporary.albums_view_mode = 'grid'
+    await renderComponent()
+
+    screen.getByTestId('album-grid')
+    expect(screen.queryByTestId('album-table')).toBeNull()
+
+    await h.user.click(screen.getByRole('radio', { name: 'View as table' }))
+    await waitFor(() => {
+      screen.getByTestId('album-table')
+      expect(screen.queryByTestId('album-grid')).toBeNull()
     })
 
-    it('shows a message when the library is empty', async () => {
-      commonStore.state.song_length = 0
-      await this.renderComponent()
+    await h.user.click(screen.getByRole('radio', { name: 'View as grid' }))
+    await waitFor(() => {
+      screen.getByTestId('album-grid')
+      expect(screen.queryByTestId('album-table')).toBeNull()
+    })
+  })
 
-      await waitFor(() => screen.getByTestId('screen-empty-state'))
+  it('shows all or only favorites upon toggling the button', async () => {
+    const { paginateMock } = await renderComponent()
+
+    await h.user.click(screen.getByRole('button', { name: 'Show favorites only' }))
+
+    await waitFor(() =>
+      expect(paginateMock).toHaveBeenNthCalledWith(2, {
+        favorites_only: true,
+        cursor: '',
+        order: 'asc',
+        sort: 'name',
+      }),
+    )
+
+    await h.user.click(screen.getByRole('button', { name: 'Show all' }))
+
+    await waitFor(() =>
+      expect(paginateMock).toHaveBeenNthCalledWith(3, {
+        favorites_only: false,
+        cursor: '',
+        order: 'asc',
+        sort: 'name',
+      }),
+    )
+  })
+
+  it('filters out unfavorited albums in favorites mode', async () => {
+    const albums = h.factory('album').make({ favorite: true }, 5)
+    albumStore.state.albums = albums
+
+    h.mock(albumStore, 'paginate').mockResolvedValue(null)
+
+    h.render(Component, {
+      global: {
+        stubs: {
+          AlbumGrid: albumGridStub,
+          AlbumTable: albumTableStub,
+        },
+      },
     })
 
-    it.each<[ArtistAlbumViewMode]>([['list'], ['thumbnails']])('sets layout from preferences', async (mode) => {
-      preferenceStore.albumsViewMode = mode
+    await h.tick(2)
 
-      await this.renderComponent()
+    preferences.albums_favorites_only = true
+    await h.tick()
 
-      await waitFor(() => expect(screen.getByTestId('album-list').classList.contains(`as-${mode}`)).toBe(true))
+    expect(screen.getAllByTestId('album-card')).toHaveLength(5)
+
+    albumStore.state.albums[0].favorite = false
+    await h.tick()
+
+    expect(screen.getAllByTestId('album-card')).toHaveLength(4)
+  })
+
+  it('shows empty state when no favorite albums', async () => {
+    albumStore.state.albums = []
+
+    h.mock(albumStore, 'paginate').mockResolvedValue(null)
+    preferences.albums_favorites_only = true
+
+    h.render(Component, {
+      global: {
+        stubs: {
+          AlbumGrid: albumGridStub,
+          AlbumTable: albumTableStub,
+        },
+      },
     })
 
-    it('switches layout', async () => {
-      await this.renderComponent()
+    await h.tick(2)
 
-      await this.user.click(screen.getByRole('radio', { name: 'View as list' }))
-      await waitFor(() => expect(screen.getByTestId('album-list').classList.contains(`as-list`)).toBe(true))
-
-      await this.user.click(screen.getByRole('radio', { name: 'View as thumbnails' }))
-      await waitFor(() => expect(screen.getByTestId('album-list').classList.contains(`as-thumbnails`)).toBe(true))
+    await waitFor(() => {
+      const emptyState = screen.getByTestId('screen-empty-state')
+      expect(emptyState.textContent).toContain('No favorite albums')
     })
-  }
-}
+  })
+})

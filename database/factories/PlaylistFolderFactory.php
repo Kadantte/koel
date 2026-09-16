@@ -6,16 +6,15 @@ use App\Models\PlaylistFolder;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Factories\Factory;
 
+/** @extends Factory<PlaylistFolder> */
 class PlaylistFolderFactory extends Factory
 {
-    protected $model = PlaylistFolder::class;
-
-    /** @return array<mixed> */
+    /** @inheritdoc */
     public function definition(): array
     {
         return [
             'user_id' => User::factory(),
-            'name' => $this->faker->name,
+            'name' => fake()->name,
         ];
     }
 }

@@ -1,121 +1,232 @@
-import { expect, it } from 'vitest'
-import UnitTestCase from '@/__tests__/UnitTestCase'
-import { eventBus } from '@/utils'
+import { describe, expect, it, vi } from 'vite-plus/test'
+import { createHarness } from '@/__tests__/TestHarness'
+import { assertOpenModal } from '@/__tests__/assertions'
 import factory from '@/__tests__/factory'
-import { screen, waitFor } from '@testing-library/vue'
-import { songStore } from '@/stores'
-import { playbackService } from '@/services'
 import { MessageToasterStub } from '@/__tests__/stubs'
-import PlaylistContextMenu from './PlaylistContextMenu.vue'
+import { screen, waitFor } from '@testing-library/vue'
+import { commonStore } from '@/stores/commonStore'
+import { queueStore } from '@/stores/queueStore'
+import { playableStore } from '@/stores/playableStore'
+import { userStore } from '@/stores/userStore'
+import { playbackService } from '@/services/QueuePlaybackService'
+import Router from '@/router'
+import { playlistStore } from '@/stores/playlistStore'
+import EditPlaylistForm from '@/components/playlist/EditPlaylistForm.vue'
+import EditSmartPlaylistForm from '@/components/playlist/smart-playlist/EditSmartPlaylistForm.vue'
+import PlaylistCollaborationModal from '@/components/playlist/PlaylistCollaborationModal.vue'
+import CreateEmbedForm from '@/components/embed/CreateEmbedForm.vue'
 
-new class extends UnitTestCase {
-  private async renderComponent (playlist: Playlist) {
-    this.render(PlaylistContextMenu)
-    eventBus.emit('PLAYLIST_CONTEXT_MENU_REQUESTED', { pageX: 420, pageY: 42 } as MouseEvent, playlist)
-    await this.tick(2)
+const openModalMock = vi.fn()
+
+vi.mock('@/composables/useModal', () => ({
+  useModal: () => ({
+    openModal: openModalMock,
+  }),
+}))
+
+import Component from './PlaylistContextMenu.vue'
+
+describe('playlistContextMenu.vue', () => {
+  const h = createHarness({
+    beforeEach: () => {
+      queueStore.state.playables = []
+      openModalMock.mockClear()
+    },
+  })
+
+  const renderComponent = async (playlist: Playlist, user: CurrentUser | null = null) => {
+    if (!vi.isMockFunction(playableStore.fetchForPlaylist)) {
+      h.mock(playableStore, 'fetchForPlaylist').mockResolvedValue([])
+    }
+
+    user = user || (h.factory('user').state('current').make() as CurrentUser)
+
+    userStore.state.current = user
+
+    const rendered = h.render(Component, {
+      props: {
+        playlist,
+      },
+    })
+
+    await h.tick(2)
+
+    return {
+      ...rendered,
+      playlist,
+      user,
+    }
   }
 
-  protected test () {
-    it('edits a standard playlist', async () => {
-      const playlist = factory<Playlist>('playlist')
-      await this.renderComponent(playlist)
-      const emitMock = this.mock(eventBus, 'emit')
+  const makeEditablePlaylist = (overrides: Partial<Playlist> = {}) =>
+    h.factory('playlist').make({ permissions: { edit: true, delete: false }, ...overrides })
 
-      await this.user.click(screen.getByText('Edit…'))
+  const makeDeletablePlaylist = (overrides: Partial<Playlist> = {}) =>
+    h.factory('playlist').make({ permissions: { edit: false, delete: true }, ...overrides })
 
-      expect(emitMock).toHaveBeenCalledWith('MODAL_SHOW_EDIT_PLAYLIST_FORM', playlist)
+  it('edits a standard playlist', async () => {
+    const { playlist } = await renderComponent(makeEditablePlaylist())
+
+    await h.user.click(screen.getByText('Edit…'))
+
+    await assertOpenModal(openModalMock, EditPlaylistForm, { playlist })
+  })
+
+  it('edits a smart playlist', async () => {
+    const { playlist } = await renderComponent(
+      factory('playlist')
+        .state('smart')
+        .make({ permissions: { edit: true, delete: false } }),
+    )
+
+    await h.user.click(screen.getByText('Edit…'))
+
+    await assertOpenModal(openModalMock, EditSmartPlaylistForm, { playlist })
+  })
+
+  it('deletes a playlist', async () => {
+    const deleteMock = h.mock(playlistStore, 'delete')
+    const { playlist } = await renderComponent(makeDeletablePlaylist())
+
+    await h.user.click(screen.getByText('Delete'))
+
+    expect(deleteMock).toHaveBeenCalledWith(playlist)
+  })
+
+  it('hides Edit when only delete is permitted', async () => {
+    await renderComponent(makeDeletablePlaylist())
+
+    expect(screen.queryByText('Edit…')).toBeNull()
+  })
+
+  it('hides Delete when only edit is permitted', async () => {
+    await renderComponent(makeEditablePlaylist())
+
+    expect(screen.queryByText('Delete')).toBeNull()
+  })
+
+  it('plays', async () => {
+    h.createAudioPlayer()
+
+    const songs = h.factory('song').make(3)
+    const fetchMock = h.mock(playableStore, 'fetchForPlaylist').mockResolvedValue(songs)
+    const queueMock = h.mock(playbackService, 'queueAndPlay')
+    const goMock = h.mock(Router, 'go')
+    const { playlist } = await renderComponent(h.factory('playlist').make())
+
+    await h.user.click(screen.getByText('Play'))
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(playlist)
+      expect(queueMock).toHaveBeenCalledWith(songs)
+      expect(goMock).toHaveBeenCalledWith('/#/queue')
     })
+  })
 
-    it('edits a smart playlist', async () => {
-      const playlist = factory.states('smart')<Playlist>('playlist')
-      await this.renderComponent(playlist)
-      const emitMock = this.mock(eventBus, 'emit')
+  it('warns if attempting to play an empty playlist', async () => {
+    h.createAudioPlayer()
 
-      await this.user.click(screen.getByText('Edit…'))
+    const fetchMock = h.mock(playableStore, 'fetchForPlaylist').mockResolvedValue([])
+    const queueMock = h.mock(playbackService, 'queueAndPlay')
+    const goMock = h.mock(Router, 'go')
+    const warnMock = h.mock(MessageToasterStub.value, 'warning')
 
-      expect(emitMock).toHaveBeenCalledWith('MODAL_SHOW_EDIT_PLAYLIST_FORM', playlist)
+    const { playlist } = await renderComponent(h.factory('playlist').make())
+
+    await h.user.click(screen.getByText('Play'))
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(playlist)
+      expect(queueMock).not.toHaveBeenCalled()
+      expect(goMock).not.toHaveBeenCalled()
+      expect(warnMock).toHaveBeenCalledWith('The playlist is empty.')
     })
+  })
 
-    it('deletes a playlist', async () => {
-      const playlist = factory<Playlist>('playlist')
-      await this.renderComponent(playlist)
-      const emitMock = this.mock(eventBus, 'emit')
+  it('shuffles', async () => {
+    h.createAudioPlayer()
 
-      await this.user.click(screen.getByText('Delete'))
+    const songs = h.factory('song').make(3)
+    const fetchMock = h.mock(playableStore, 'fetchForPlaylist').mockResolvedValue(songs)
+    const queueMock = h.mock(playbackService, 'queueAndPlay')
+    const goMock = h.mock(Router, 'go')
+    const { playlist } = await renderComponent(h.factory('playlist').make())
 
-      expect(emitMock).toHaveBeenCalledWith('PLAYLIST_DELETE', playlist)
+    await h.user.click(screen.getByText('Shuffle'))
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(playlist)
+      expect(queueMock).toHaveBeenCalledWith(songs, true)
+      expect(goMock).toHaveBeenCalledWith('/#/queue')
     })
+  })
 
-    it('plays', async () => {
-      const playlist = factory<Playlist>('playlist')
-      const songs = factory<Song>('song', 3)
-      const fetchMock = this.mock(songStore, 'fetchForPlaylist').mockResolvedValue(songs)
-      const queueMock = this.mock(playbackService, 'queueAndPlay')
-      const goMock = this.mock(this.router, 'go')
-      await this.renderComponent(playlist)
+  it('warns if attempting to shuffle an empty playlist', async () => {
+    h.createAudioPlayer()
 
-      await this.user.click(screen.getByText('Play'))
+    const fetchMock = h.mock(playableStore, 'fetchForPlaylist').mockResolvedValue([])
+    const queueMock = h.mock(playbackService, 'queueAndPlay')
+    const goMock = h.mock(Router, 'go')
+    const warnMock = h.mock(MessageToasterStub.value, 'warning')
 
-      await waitFor(() => {
-        expect(fetchMock).toHaveBeenCalledWith(playlist)
-        expect(queueMock).toHaveBeenCalledWith(songs)
-        expect(goMock).toHaveBeenCalledWith('queue')
-      })
+    const { playlist } = await renderComponent(h.factory('playlist').make())
+
+    await h.user.click(screen.getByText('Shuffle'))
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(playlist)
+      expect(queueMock).not.toHaveBeenCalled()
+      expect(goMock).not.toHaveBeenCalled()
+      expect(warnMock).toHaveBeenCalledWith('The playlist is empty.')
     })
+  })
 
-    it('warns if attempting to play an empty playlist', async () => {
-      const playlist = factory<Playlist>('playlist')
-      const fetchMock = this.mock(songStore, 'fetchForPlaylist').mockResolvedValue([])
-      const queueMock = this.mock(playbackService, 'queueAndPlay')
-      const goMock = this.mock(this.router, 'go')
-      const warnMock = this.mock(MessageToasterStub.value, 'warning')
+  it('queues', async () => {
+    h.createAudioPlayer()
 
-      await this.renderComponent(playlist)
+    const songs = h.factory('song').make(3)
+    const fetchMock = h.mock(playableStore, 'fetchForPlaylist').mockResolvedValue(songs)
+    const queueMock = h.mock(queueStore, 'queueAfterCurrent')
+    const toastMock = h.mock(MessageToasterStub.value, 'success')
+    const { playlist } = await renderComponent(h.factory('playlist').make())
 
-      await this.user.click(screen.getByText('Play'))
+    await h.user.click(screen.getByText('Add to Queue'))
 
-      await waitFor(() => {
-        expect(fetchMock).toHaveBeenCalledWith(playlist)
-        expect(queueMock).not.toHaveBeenCalled()
-        expect(goMock).not.toHaveBeenCalled()
-        expect(warnMock).toHaveBeenCalledWith('The playlist is empty.')
-      })
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(playlist)
+      expect(queueMock).toHaveBeenCalledWith(songs)
+      expect(toastMock).toHaveBeenCalledWith('Playlist added to queue.')
     })
+  })
 
-    it('shuffles', async () => {
-      const playlist = factory<Playlist>('playlist')
-      const songs = factory<Song>('song', 3)
-      const fetchMock = this.mock(songStore, 'fetchForPlaylist').mockResolvedValue(songs)
-      const queueMock = this.mock(playbackService, 'queueAndPlay')
-      const goMock = this.mock(this.router, 'go')
-      await this.renderComponent(playlist)
+  it('does not have an option to edit or delete if the playlist is not owned by the current user', async () => {
+    const playlist = h.factory('playlist').make({ permissions: { edit: false, delete: false } })
+    await renderComponent(playlist, h.factory('user').state('current').make() as CurrentUser)
 
-      await this.user.click(screen.getByText('Shuffle'))
+    expect(screen.queryByText('Edit…')).toBeNull()
+    expect(screen.queryByText('Delete')).toBeNull()
+  })
 
-      await waitFor(() => {
-        expect(fetchMock).toHaveBeenCalledWith(playlist)
-        expect(queueMock).toHaveBeenCalledWith(songs, true)
-        expect(goMock).toHaveBeenCalledWith('queue')
-      })
-    })
+  it('opens collaboration form', async () =>
+    await h.withPlusEdition(async () => {
+      const { playlist } = await renderComponent(h.factory('playlist').make())
 
-    it('warns if attempting to shuffle an empty playlist', async () => {
-      const playlist = factory<Playlist>('playlist')
-      const fetchMock = this.mock(songStore, 'fetchForPlaylist').mockResolvedValue([])
-      const queueMock = this.mock(playbackService, 'queueAndPlay')
-      const goMock = this.mock(this.router, 'go')
-      const warnMock = this.mock(MessageToasterStub.value, 'warning')
+      await h.user.click(screen.getByText('Collaborate…'))
 
-      await this.renderComponent(playlist)
+      await assertOpenModal(openModalMock, PlaylistCollaborationModal, { playlist })
+    }))
 
-      await this.user.click(screen.getByText('Shuffle'))
+  it('requests the embed form', async () => {
+    const { playlist } = await renderComponent(h.factory('playlist').make())
+    await h.user.click(screen.getByText('Embed…'))
 
-      await waitFor(() => {
-        expect(fetchMock).toHaveBeenCalledWith(playlist)
-        expect(queueMock).not.toHaveBeenCalled()
-        expect(goMock).not.toHaveBeenCalled()
-        expect(warnMock).toHaveBeenCalledWith('The playlist is empty.')
-      })
-    })
-  }
-}
+    await assertOpenModal(openModalMock, CreateEmbedForm, { embeddable: playlist })
+  })
+
+  it('does not have an option to embed when embedding is disabled', async () => {
+    commonStore.state.allows_embedding = false
+    await renderComponent(h.factory('playlist').make())
+
+    expect(screen.queryByText('Embed…')).toBeNull()
+  })
+})

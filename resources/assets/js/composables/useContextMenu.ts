@@ -1,22 +1,65 @@
-import { reactive, ref } from 'vue'
-import ContextMenuBase from '@/components/ui/ContextMenuBase.vue'
+import type { Component } from 'vue'
+import ContextMenu from '@/components/ui/context-menu/ContextMenu.vue'
+import Separator from '@/components/ui/context-menu/ContextMenuSeparator.vue'
+import MenuItem from '@/components/ui/context-menu/ContextMenuItem.vue'
+
+import { ContextMenuKey } from '@/config/symbols'
+import { requireInjection } from '@/utils/helpers'
+import type { ContextMenus } from '@/config/contextMenus'
+
+type Position =
+  | {
+      top: number
+      left: number
+    }
+  | MouseEvent
 
 export const useContextMenu = () => {
-  const base = ref<InstanceType<typeof ContextMenuBase>>()
+  const contextMenuOptions = requireInjection(ContextMenuKey)
 
-  const open = async (top: number, left: number) => await base.value?.open(top, left)
-  const close = () => base.value?.close()
+  const openContextMenu = <K extends keyof ContextMenus = never>(
+    menu: Component,
+    position: Position,
+    props?: K extends keyof ContextMenus
+      ? ContextMenus[K] extends never
+        ? Record<string, never>
+        : ContextMenus[K]
+      : Record<string, never>,
+  ) => {
+    if (position instanceof MouseEvent) {
+      position = {
+        top: position.clientY,
+        left: position.clientX,
+      }
+    }
 
-  const trigger = (func: Closure) => {
-    close()
-    func()
+    contextMenuOptions.value = {
+      component: menu,
+      position,
+      props: props || {},
+    }
+  }
+
+  const closeContextMenu = () => {
+    contextMenuOptions.value = {
+      component: null,
+      position: { top: 0, left: 0 },
+    }
+  }
+
+  const trigger = async (func: Closure) => {
+    // Run the callback before closing the context menu to preserve the user activation
+    // (required for clipboard writes and other APIs that need a user gesture).
+    await func()
+    closeContextMenu()
   }
 
   return {
-    ContextMenuBase,
-    base,
-    open,
-    close,
-    trigger
+    ContextMenu,
+    Separator,
+    MenuItem,
+    openContextMenu,
+    closeContextMenu,
+    trigger,
   }
 }

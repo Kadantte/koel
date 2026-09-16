@@ -2,53 +2,52 @@
 
 namespace App\Console\Commands;
 
-use App\Console\Commands\Traits\AskForPassword;
+use App\Console\Commands\Concerns\AskForPassword;
 use App\Exceptions\InstallationFailedException;
 use App\Models\Setting;
 use App\Models\User;
-use App\Services\MediaCacheService;
+use App\Repositories\UserRepository;
+use App\Services\DotenvEditor;
+use App\Services\PublicStorageLinker;
+use App\Services\PwaManifestService;
 use Illuminate\Console\Command;
-use Illuminate\Contracts\Console\Kernel as Artisan;
-use Illuminate\Contracts\Hashing\Hasher as Hash;
-use Illuminate\Database\DatabaseManager as DB;
 use Illuminate\Encryption\Encrypter;
+use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Process;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
-use Jackiedo\DotenvEditor\DotenvEditor;
-use Psr\Log\LoggerInterface;
 use Throwable;
 
+// @mago-ignore lint:too-many-methods,cyclomatic-complexity,kan-defect
 class InitCommand extends Command
 {
     use AskForPassword;
 
-    private const DEFAULT_ADMIN_NAME = 'Koel';
-    private const DEFAULT_ADMIN_EMAIL = 'admin@koel.dev';
-    private const DEFAULT_ADMIN_PASSWORD = 'KoelIsCool';
-    private const NON_INTERACTION_MAX_DATABASE_ATTEMPT_COUNT = 10;
+    private const int NON_INTERACTION_MAX_DATABASE_ATTEMPT_COUNT = 10;
 
-    protected $signature = 'koel:init {--no-assets}';
+    protected $signature = 'koel:init {--no-assets : Do not compile front-end assets} {--no-scheduler : Do not install scheduler}';
     protected $description = 'Install or upgrade Koel';
 
     private bool $adminSeeded = false;
 
     public function __construct(
-        private MediaCacheService $mediaCacheService,
-        private Artisan $artisan,
-        private Hash $hash,
-        private DotenvEditor $dotenvEditor,
-        private DB $db,
-        private LoggerInterface $logger
+        private readonly UserRepository $userRepository,
+        private readonly DotenvEditor $dotenvEditor,
+        private readonly PublicStorageLinker $publicStorageLinker,
+        private readonly PwaManifestService $pwaManifestService,
     ) {
         parent::__construct();
     }
 
     public function handle(): int
     {
-        $this->alert('KOEL INSTALLATION WIZARD');
-        $this->info(
-            'As a reminder, you can always install/upgrade manually following the guide at '
-            . config('koel.misc.docs_url')
-            . PHP_EOL
+        $this->components->alert('KOEL INSTALLATION WIZARD');
+
+        $this->components->info(
+            'Remember, you can always install/upgrade manually using the guide at ' . config('koel.misc.docs_url'),
         );
 
         if ($this->inNoInteractionMode()) {
@@ -57,71 +56,73 @@ class InitCommand extends Command
 
         try {
             $this->clearCaches();
-            $this->loadEnvFile();
+            $this->ensureEnvFileExists();
             $this->maybeGenerateAppKey();
             $this->maybeSetUpDatabase();
             $this->migrateDatabase();
             $this->maybeSeedDatabase();
+            $this->linkStorage();
+            $this->migrateLegacyImages();
             $this->maybeSetMediaPath();
             $this->maybeCompileFrontEndAssets();
-            $this->dotenvEditor->save();
+            $this->removeLegacyManifests();
+            $this->tryInstallingScheduler();
         } catch (Throwable $e) {
-            $this->logger->error($e);
+            Log::error($e);
 
             $this->components->error("Oops! Koel installation or upgrade didn't finish successfully.");
             $this->components->error('Please check the error log at storage/logs/laravel.log and try again.');
-            $this->components->error('You can also visit ' . config('koel.misc.docs_url') . ' for other options.');
+            $this->components->error('For further troubleshooting, visit https://docs.koel.dev/troubleshooting.');
             $this->components->error('😥 Sorry for this. You deserve better.');
 
             return self::FAILURE;
         }
 
         $this->newLine();
-        $this->output->success('All done!');
-        $this->info('Koel can now be run from localhost with `php artisan serve`.');
+        $this->components->success('All done!');
+
+        if (app()->environment('local')) {
+            $this->components->info('🏗️ Koel can now be run from localhost with `php artisan serve`');
+        } else {
+            $this->components->info('🌟 A shiny Koel is now available at ' . config('app.url'));
+        }
 
         if ($this->adminSeeded) {
-            $this->info(
-                sprintf('Log in with email %s and password %s', self::DEFAULT_ADMIN_EMAIL, self::DEFAULT_ADMIN_PASSWORD)
-            );
+            $this->components->info(sprintf(
+                '🧑‍💻 Log in with email %s and password %s',
+                User::FIRST_ADMIN_EMAIL,
+                User::FIRST_ADMIN_PASSWORD,
+            ));
         }
 
-        if (Setting::get('media_path')) {
-            $this->info('You can also scan for media now with `php artisan koel:sync`.');
+        if (!Setting::get('media_path')) {
+            $this->components->info('📀 You can set up the storage with `php artisan koel:storage`');
         }
 
-        $this->info('Again, visit 📙 ' . config('koel.misc.docs_url') . ' for more tips and tweaks.');
-
-        $this->info(
-            "Feeling generous and want to support Koel's development? Check out "
-            . config('koel.misc.sponsor_github_url')
-            . ' 🤗'
-        );
-
-        $this->info('Thanks for using Koel. You rock! 🤘');
+        $this->components->info('🛟 Documentation can be found at ' . config('koel.misc.docs_url'));
+        $this->components->info('🤗 Consider supporting Koel’s development: ' . config('koel.misc.sponsor_github_url'));
+        $this->components->info('🤘 Finally, thanks for using Koel. You rock!');
 
         return self::SUCCESS;
     }
 
     private function clearCaches(): void
     {
-        $this->components->task('Clearing caches', function (): void {
-            $this->artisan->call('config:clear');
-            $this->artisan->call('cache:clear');
+        $this->components->task('Clearing caches', static function (): void {
+            Artisan::call('config:clear', ['--quiet' => true]);
+            Artisan::call('cache:clear', ['--quiet' => true]);
         });
     }
 
-    private function loadEnvFile(): void
+    private function ensureEnvFileExists(): void
     {
-        if (!file_exists(base_path('.env'))) {
+        if (!File::exists(base_path('.env'))) {
             $this->components->task('Copying .env file', static function (): void {
-                copy(base_path('.env.example'), base_path('.env'));
+                File::copy(base_path('.env.example'), base_path('.env'));
             });
         } else {
-            $this->components->info('.env file exists -- skipping');
+            $this->components->task('.env file exists -- skipping');
         }
-
-        $this->dotenvEditor->load(base_path('.env'));
     }
 
     private function maybeGenerateAppKey(): void
@@ -137,8 +138,7 @@ class InitCommand extends Command
             }
         });
 
-        $this->newLine();
-        $this->components->info('Using app key: ' . Str::limit($key, 16));
+        $this->components->task('Using app key: ' . Str::limit($key, 16));
     }
 
     /**
@@ -161,7 +161,7 @@ class InitCommand extends Command
                 'sqlsrv' => 'SQL Server',
                 'sqlite-e2e' => 'SQLite',
             ],
-            'mysql'
+            'mysql',
         );
 
         if ($config['DB_CONNECTION'] === 'sqlite-e2e') {
@@ -174,11 +174,7 @@ class InitCommand extends Command
             $config['DB_PASSWORD'] = (string) $this->ask('DB password');
         }
 
-        foreach ($config as $key => $value) {
-            $this->dotenvEditor->setKey($key, $value);
-        }
-
-        $this->dotenvEditor->save();
+        $this->dotenvEditor->setKeys($config);
 
         // Set the config so that the next DB attempt uses refreshed credentials
         config([
@@ -204,13 +200,7 @@ class InitCommand extends Command
     private function setUpAdminAccount(): void
     {
         $this->components->task('Creating default admin account', function (): void {
-            User::query()->create([
-                'name' => self::DEFAULT_ADMIN_NAME,
-                'email' => self::DEFAULT_ADMIN_EMAIL,
-                'password' => $this->hash->make(self::DEFAULT_ADMIN_PASSWORD),
-                'is_admin' => true,
-            ]);
-
+            $this->userRepository->getOrCreateFirstAdmin();
             $this->adminSeeded = true;
         });
     }
@@ -220,12 +210,11 @@ class InitCommand extends Command
         if (!User::query()->count()) {
             $this->setUpAdminAccount();
 
-            $this->components->task('Seeding data', function (): void {
-                $this->artisan->call('db:seed', ['--force' => true]);
+            $this->components->task('Seeding data', static function (): void {
+                Artisan::call('db:seed', ['--force' => true, '--quiet' => true]);
             });
         } else {
-            $this->newLine();
-            $this->components->info('Data already seeded -- skipping');
+            $this->components->task('Data already seeded -- skipping');
         }
     }
 
@@ -237,7 +226,7 @@ class InitCommand extends Command
             // In non-interactive mode, we must not endlessly attempt to connect.
             // Doing so will just end up with a huge amount of "failed to connect" logs.
             // We do retry a little, though, just in case there's some kind of temporary failure.
-            if ($this->inNoInteractionMode() && $attempt >= self::NON_INTERACTION_MAX_DATABASE_ATTEMPT_COUNT) {
+            if ($attempt >= self::NON_INTERACTION_MAX_DATABASE_ATTEMPT_COUNT && $this->inNoInteractionMode()) {
                 $this->components->error('Maximum database connection attempts reached. Giving up.');
                 break;
             }
@@ -246,21 +235,22 @@ class InitCommand extends Command
 
             try {
                 // Make sure the config cache is cleared before another attempt.
-                $this->artisan->call('config:clear');
-                $this->db->reconnect()->getPdo();
+                Artisan::call('config:clear', ['--quiet' => true]);
+                DB::reconnect();
+                Schema::getTables();
 
                 break;
             } catch (Throwable $e) {
-                $this->logger->error($e);
+                Log::error($e);
 
                 // We only try to update credentials if running in interactive mode.
                 // Otherwise, we require admin intervention to fix them.
                 // This avoids inadvertently wiping credentials if there's a connection failure.
                 if ($this->inNoInteractionMode()) {
                     $warning = sprintf(
-                        "Cannot connect to the database. Attempt: %d/%d",
+                        'Cannot connect to the database. Attempt: %d/%d',
                         $attempt,
-                        self::NON_INTERACTION_MAX_DATABASE_ATTEMPT_COUNT
+                        self::NON_INTERACTION_MAX_DATABASE_ATTEMPT_COUNT,
                     );
 
                     $this->components->warn($warning);
@@ -274,12 +264,68 @@ class InitCommand extends Command
 
     private function migrateDatabase(): void
     {
-        $this->components->task('Migrating database', function (): void {
-            $this->artisan->call('migrate', ['--force' => true]);
+        $this->components->task('Migrating database', static function (): void {
+            Artisan::call('migrate', ['--force' => true, '--quiet' => true]);
+        });
+    }
+
+    private function linkStorage(): void
+    {
+        $linked = false;
+
+        $this->components->task('Linking storage', function () use (&$linked): void {
+            $linked = $this->publicStorageLinker->link();
         });
 
-        // Clear the media cache, just in case we did any media-related migration
-        $this->mediaCacheService->clear();
+        if (!$linked) {
+            $this->components->warn('Failed to link storage. Album and artist images may not load until you run '
+            . '`php artisan storage:link` manually.');
+        }
+    }
+
+    private function migrateLegacyImages(): void
+    {
+        $legacyDir = public_path('img/storage');
+
+        if (!File::isDirectory($legacyDir)) {
+            return;
+        }
+
+        $files = File::files($legacyDir);
+
+        if (!count($files)) {
+            File::deleteDirectory($legacyDir);
+
+            return;
+        }
+
+        $allMigrated = true;
+
+        $this->components->task(
+            sprintf('Migrating %d legacy image(s) to storage/app/public/images/', count($files)),
+            static function () use ($files, &$allMigrated): void {
+                $destDir = storage_path('app/public/images');
+                File::ensureDirectoryExists($destDir);
+
+                foreach ($files as $file) {
+                    $dest = $destDir . DIRECTORY_SEPARATOR . $file->getFilename();
+
+                    $ok = File::exists($dest)
+                        ? File::delete($file->getPathname())
+                        : File::move($file->getPathname(), $dest);
+
+                    $allMigrated = $allMigrated && $ok;
+                }
+            },
+        );
+
+        if ($allMigrated) {
+            File::deleteDirectory($legacyDir);
+        } else {
+            $this->components->warn(
+                'Some legacy images could not be migrated. Keeping public/img/storage for manual recovery.',
+            );
+        }
     }
 
     private function maybeSetMediaPath(): void
@@ -295,7 +341,10 @@ class InitCommand extends Command
         }
 
         $this->newLine();
-        $this->info('The absolute path to your media directory. If this is skipped (left blank) now, you can set it later via the web interface.'); // @phpcs-ignore-line
+        $this->info(
+            'The absolute path to your media directory. You can leave it blank and set it later via the web interface.',
+        );
+        $this->info('If you plan to use Koel with a cloud provider (S3 or Dropbox), you can also skip this.');
 
         while (true) {
             $path = $this->ask('Media path', config('koel.media_path'));
@@ -320,16 +369,20 @@ class InitCommand extends Command
             return;
         }
 
-        $this->components->info('Now to front-end stuff');
+        $this->components->task('Installing npm dependencies', function (): void {
+            $this->runOkOrThrow('pnpm install --color');
+        });
 
-        $runOkOrThrow = static function (string $command): void {
-            passthru($command, $status);
-            throw_if((bool) $status, InstallationFailedException::class);
-        };
+        $this->components->task('Compiling frontend assets', function (): void {
+            $this->runOkOrThrow('pnpm run --color build');
+        });
+    }
 
-        $runOkOrThrow('yarn install --colors');
-        $this->components->info('Compiling assets');
-        $runOkOrThrow('yarn build');
+    private function runOkOrThrow(string $command): void
+    {
+        $printer = $this->option('verbose') ? static fn (string $type, string $output) => print $output : null;
+
+        throw_unless(Process::forever()->run($command, $printer)->successful(), InstallationFailedException::class);
     }
 
     private function setMediaPathFromEnvFile(): void
@@ -349,14 +402,40 @@ class InitCommand extends Command
 
     private static function isValidMediaPath(string $path): bool
     {
-        return is_dir($path) && is_readable($path);
+        return File::isDirectory($path) && File::isReadable($path);
     }
 
-    /**
-     * Generate a random key for the application.
-     */
     private function generateRandomKey(): string
     {
         return 'base64:' . base64_encode(Encrypter::generateKey($this->laravel['config']['app.cipher']));
+    }
+
+    private function tryInstallingScheduler(): void
+    {
+        if (PHP_OS_FAMILY === 'Windows' || PHP_OS_FAMILY === 'Unknown') {
+            return;
+        }
+
+        if ((bool) $this->option('no-scheduler')) {
+            return;
+        }
+
+        $result = 0;
+
+        $this->components->task('Installing Koel scheduler', static function () use (&$result): void {
+            $result = Artisan::call('koel:scheduler:install', ['--quiet' => true]);
+        });
+
+        if ($result !== self::SUCCESS) {
+            $this->components->warn('Failed to install scheduler. '
+            . 'Please install manually: https://docs.koel.dev/cli-commands#command-scheduling');
+        }
+    }
+
+    private function removeLegacyManifests(): void
+    {
+        $this->components->task('Removing legacy manifests', function (): void {
+            $this->pwaManifestService->removeUncustomizedLegacyFiles();
+        });
     }
 }

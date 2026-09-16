@@ -1,58 +1,103 @@
 <template>
-  <section id="homeWrapper">
-    <ScreenHeader layout="collapsed">{{ greeting }}</ScreenHeader>
-
-    <div v-koel-overflow-fade class="main-scroll-wrap" @scroll="scrolling">
-      <ScreenEmptyState v-if="libraryEmpty">
-        <template #icon>
-          <Icon :icon="faVolumeOff" />
+  <ScreenBase id="homeWrapper">
+    <template #header>
+      <ScreenHeader layout="collapsed">
+        {{ greeting }}
+        <template #controls>
+          <button
+            v-if="!libraryEmpty"
+            type="button"
+            class="w-9 h-9 rounded-full flex items-center justify-center text-k-fg-70 hover:text-k-fg hover:bg-k-fg-5 transition shrink-0"
+            title="Reorder home blocks"
+            data-testid="reorder-home-blocks-btn"
+            @click="openReorderModal"
+          >
+            <ListChevronsUpDownIcon class="w-5 h-5" />
+            <span class="sr-only">Reorder home blocks</span>
+          </button>
         </template>
-        No songs found.
-        <span class="secondary d-block">
-          {{ isAdmin ? 'Have you set up your library yet?' : 'Contact your administrator to set up your library.' }}
-        </span>
-      </ScreenEmptyState>
+      </ScreenHeader>
+    </template>
 
-      <template v-else>
-        <div class="two-cols">
-          <MostPlayedSongs data-testid="most-played-songs" :loading="loading" />
-          <RecentlyPlayedSongs data-testid="recently-played-songs" :loading="loading" />
-        </div>
-
-        <div class="two-cols">
-          <RecentlyAddedAlbums data-testid="recently-added-albums" :loading="loading" />
-          <RecentlyAddedSongs data-testid="recently-added-songs" :loading="loading" />
-        </div>
-
-        <MostPlayedArtists data-testid="most-played-artists" :loading="loading" />
-        <MostPlayedAlbums data-testid="most-played-albums" :loading="loading" />
-
-        <ToTopButton />
+    <ScreenEmptyState v-if="libraryEmpty">
+      <template #icon>
+        <Icon :icon="faVolumeOff" />
       </template>
+      No songs found.
+      <span v-if="currentUserCan.manageSettings()" class="secondary block"> Have you set up your library yet? </span>
+    </ScreenEmptyState>
+
+    <div v-else class="home-sections space-y-12 w-full">
+      <component
+        v-for="block in orderedBlocks"
+        :key="block.id"
+        :is="block.component"
+        :loading
+        :data-testid="block.id"
+      />
+      <BtnScrollToTop />
     </div>
-  </section>
+  </ScreenBase>
 </template>
 
 <script lang="ts" setup>
 import { faVolumeOff } from '@fortawesome/free-solid-svg-icons'
-import { sample } from 'lodash'
-import { computed, ref } from 'vue'
-import { eventBus, logger, noop } from '@/utils'
-import { commonStore, overviewStore, userStore } from '@/stores'
-import { useAuthorization, useDialogBox, useInfiniteScroll, useRouter } from '@/composables'
+import { ListChevronsUpDownIcon } from 'lucide-vue-next'
+import { sample } from 'lodash-es'
+import type { Component } from 'vue'
+import { computed, defineAsyncComponent, ref } from 'vue'
+import { eventBus } from '@/utils/eventBus'
+import { commonStore } from '@/stores/commonStore'
+import { overviewStore } from '@/stores/overviewStore'
+import { preferenceStore } from '@/stores/preferenceStore'
+import { userStore } from '@/stores/userStore'
+import { useRouter } from '@/composables/useRouter'
+import { useModal } from '@/composables/useModal'
+import { usePolicies } from '@/composables/usePolicies'
+import { useErrorHandler } from '@/composables/useErrorHandler'
 
 import MostPlayedSongs from '@/components/screens/home/MostPlayedSongs.vue'
-import RecentlyPlayedSongs from '@/components/screens/home/RecentlyPlayedSongs.vue'
-import RecentlyAddedAlbums from '@/components/screens/home/RecentlyAddedAlbums.vue'
-import RecentlyAddedSongs from '@/components/screens/home/RecentlyAddedSongs.vue'
-import MostPlayedArtists from '@/components/screens/home/MostPlayedArtists.vue'
-import MostPlayedAlbums from '@/components/screens/home/MostPlayedAlbums.vue'
+import RecentlyPlayedPlayables from '@/components/screens/home/RecentlyPlayedPlayables.vue'
+import NewAlbums from '@/components/screens/home/NewAlbums.vue'
+import NewSongs from '@/components/screens/home/NewSongs.vue'
+import TopArtists from '@/components/screens/home/TopArtists.vue'
+import TopAlbums from '@/components/screens/home/TopAlbums.vue'
+import NewArtists from '@/components/screens/home/NewArtists.vue'
+import RandomAlbums from '@/components/screens/home/RandomAlbums.vue'
+import RandomArtists from '@/components/screens/home/RandomArtists.vue'
+import LeastPlayedSongs from '@/components/screens/home/LeastPlayedSongs.vue'
+import RandomSongs from '@/components/screens/home/RandomSongs.vue'
+import SimilarSongs from '@/components/screens/home/SimilarSongs.vue'
 import ScreenHeader from '@/components/ui/ScreenHeader.vue'
 import ScreenEmptyState from '@/components/ui/ScreenEmptyState.vue'
+import BtnScrollToTop from '@/components/ui/BtnScrollToTop.vue'
+import ScreenBase from '@/components/screens/ScreenBase.vue'
 
-const { ToTopButton, scrolling } = useInfiniteScroll(() => noop())
-const { isAdmin } = useAuthorization()
-const { showErrorDialog } = useDialogBox()
+const ReorderBlocksModal = defineAsyncComponent(() => import('@/components/screens/home/ReorderBlocksModal.vue'))
+
+interface Block {
+  id: string
+  label: string
+  component: Component
+}
+
+const blocks: Block[] = [
+  { id: 'recently-played-songs', label: 'Recently Played', component: RecentlyPlayedPlayables },
+  { id: 'recently-added-albums', label: 'Latest Albums', component: NewAlbums },
+  { id: 'similar-songs', label: 'You Might Also Like', component: SimilarSongs },
+  { id: 'most-played-albums', label: 'Top Albums', component: TopAlbums },
+  { id: 'most-played-songs', label: 'Most Played', component: MostPlayedSongs },
+  { id: 'most-played-artists', label: 'Top Artists', component: TopArtists },
+  { id: 'recently-added-songs', label: 'New Songs', component: NewSongs },
+  { id: 'recently-added-artists', label: 'New Artists', component: NewArtists },
+  { id: 'least-played-songs', label: 'Hidden Gems', component: LeastPlayedSongs },
+  { id: 'random-songs', label: 'Random Songs', component: RandomSongs },
+  { id: 'random-albums', label: 'Random Albums', component: RandomAlbums },
+  { id: 'random-artists', label: 'Random Artists', component: RandomArtists },
+]
+
+const { currentUserCan } = usePolicies()
+const { openModal } = useModal()
 
 const greetings = [
   'Oh hai!',
@@ -63,27 +108,46 @@ const greetings = [
   'Sup, %s?',
   'How’s life, %s?',
   'How’s your day, %s?',
-  'How have you been, %s?'
+  'How have you been, %s?',
 ]
 
-const greeting = computed(() => userStore.current ? sample(greetings)!.replace('%s', userStore.current.name) : '')
+const greeting = computed(() => (userStore.current ? sample(greetings)!.replace('%s', userStore.current.name) : ''))
 const libraryEmpty = computed(() => commonStore.state.song_length === 0)
 
 const loading = ref(false)
 let initialized = false
 
-eventBus.on('SONGS_DELETED', () => overviewStore.refresh())
-  .on('SONGS_UPDATED', () => overviewStore.refresh())
+// Sort `blocks` so they appear in the order saved in the preference. Blocks
+// whose id isn't in the saved list fall to the end (Infinity), keeping their
+// canonical relative order via Array.sort's stability.
+const orderedBlocks = computed<Block[]>(() => {
+  const saved = preferenceStore.home_blocks_order ?? []
+  const positionOf = (id: string) => {
+    const i = saved.indexOf(id)
+    return i === -1 ? Infinity : i
+  }
+
+  return [...blocks].sort((a, b) => positionOf(a.id) - positionOf(b.id))
+})
+
+const openReorderModal = () =>
+  openModal<'REORDER_HOME_BLOCKS'>(ReorderBlocksModal, {
+    blocks: orderedBlocks.value.map(({ id, label }) => ({ id, label })),
+  })
+
+eventBus
+  .on('SONGS_DELETED', () => overviewStore.fetch())
+  .on('SONGS_UPDATED', () => overviewStore.fetch())
+  .on('SONG_UPLOADED', () => overviewStore.fetch())
 
 useRouter().onScreenActivated('Home', async () => {
   if (!initialized) {
     loading.value = true
     try {
-      await overviewStore.init()
+      await overviewStore.fetch()
       initialized = true
-    } catch (e) {
-      showErrorDialog('Failed to load home screen data. Please try again.', 'Error')
-      logger.error(e)
+    } catch (error: unknown) {
+      useErrorHandler('dialog').handleHttpError(error)
     } finally {
       loading.value = false
     }
@@ -91,48 +155,21 @@ useRouter().onScreenActivated('Home', async () => {
 })
 </script>
 
-<style lang="scss">
-#homeWrapper {
-  .two-cols {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    grid-gap: .7em 1em;
+<style lang="postcss" scoped>
+@reference '@css/app.pcss';
+.home-sections {
+  @apply min-w-0;
+
+  > * {
+    @apply min-w-0;
   }
 
-  .recent {
-    h1 button {
-      float: right;
-      padding: 6px 10px;
-      margin-top: -3px;
-    }
-  }
+  > *:not(:first-child) {
+    @apply relative;
 
-  ol {
-    display: grid;
-    grid-gap: .7em 1em;
-    align-content: start;
-  }
-
-  .main-scroll-wrap {
-    section:not(:last-of-type) {
-      margin-bottom: 48px;
-    }
-
-    h1 {
-      font-size: 1.4rem;
-      margin: 0 0 1.8rem;
-      font-weight: var(--font-weight-thin);
-    }
-  }
-
-  li {
-    overflow: hidden;
-    padding: 1px; // make space for focus outline
-  }
-
-  @media only screen and (max-width: 768px) {
-    .two-cols {
-      grid-template-columns: 1fr;
+    /* Divider sits in the gap between blocks. */
+    &::before {
+      @apply content-[''] absolute -top-6 left-0 right-0 -mx-6 h-px bg-k-fg-5;
     }
   }
 }

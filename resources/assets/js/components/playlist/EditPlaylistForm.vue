@@ -1,97 +1,91 @@
 <template>
-  <form @submit.prevent="submit" @keydown.esc="maybeClose">
+  <form @submit.prevent="handleSubmit" @keydown.esc="maybeClose">
     <header>
       <h1>Edit Playlist</h1>
     </header>
 
     <main>
-      <div class="form-row cols">
-        <label class="name">
-          Name
-          <input
-            v-model="name"
-            v-koel-focus
-            name="name"
-            placeholder="Playlist name"
-            required
-            title="Playlist name"
-            type="text"
-          >
-        </label>
-        <label class="folder">
-          Folder
-          <select v-model="folderId">
-            <option :value="null" />
-            <option v-for="folder in folders" :key="folder.id" :value="folder.id">{{ folder.name }}</option>
-          </select>
-        </label>
+      <div class="grid grid-cols-2 gap-4">
+        <FormRow>
+          <template #label>Name *</template>
+          <TextInput v-model="data.name" v-koel-focus name="name" placeholder="Playlist name" required />
+        </FormRow>
+        <FormRow>
+          <template #label>Folder</template>
+          <FolderSelect v-model:folder-id="data.folder_id" v-model:folder-name="data.folder_name" />
+        </FormRow>
+        <FormRow class="col-span-2">
+          <template #label>Description</template>
+          <TextArea v-model="data.description" class="h-28" name="description" />
+        </FormRow>
+        <ArtworkField v-model="data.cover">Pick or paste a cover (optional)</ArtworkField>
       </div>
     </main>
 
     <footer>
       <Btn type="submit">Save</Btn>
-      <Btn white @click.prevent="maybeClose">Cancel</Btn>
+      <Btn variant="ghost" @click.prevent="maybeClose">Cancel</Btn>
     </footer>
   </form>
 </template>
 
 <script lang="ts" setup>
-import { ref, toRef } from 'vue'
-import { logger } from '@/utils'
-import { playlistFolderStore, playlistStore } from '@/stores'
-import { useDialogBox, useMessageToaster, useModal, useOverlay } from '@/composables'
+import { pick } from 'lodash-es'
+import { toRaw } from 'vue'
 
-import Btn from '@/components/ui/Btn.vue'
+import type { UpdatePlaylistData } from '@/stores/playlistStore'
+import { playlistStore } from '@/stores/playlistStore'
+import { useDialogBox } from '@/composables/useDialogBox'
+import { useMessageToaster } from '@/composables/useMessageToaster'
+import { useForm } from '@/composables/useForm'
 
-const { showOverlay, hideOverlay } = useOverlay()
-const { toastSuccess } = useMessageToaster()
-const { showConfirmDialog, showErrorDialog } = useDialogBox()
-const playlist = useModal().getFromContext<Playlist>('playlist')
+import Btn from '@/components/ui/form/Btn.vue'
+import TextInput from '@/components/ui/form/TextInput.vue'
+import FormRow from '@/components/ui/form/FormRow.vue'
+import FolderSelect from '@/components/ui/form/FolderSelect.vue'
+import TextArea from '@/components/ui/form/TextArea.vue'
+import ArtworkField from '@/components/ui/form/ArtworkField.vue'
 
-const name = ref(playlist.name)
-const folderId = ref(playlist.folder_id)
-const folders = toRef(playlistFolderStore.state, 'folders')
-
+const props = defineProps<{ playlist: Playlist }>()
 const emit = defineEmits<{ (e: 'close'): void }>()
+
+const { playlist } = props
+
+const { toastSuccess } = useMessageToaster()
+const { showConfirmDialog } = useDialogBox()
+
 const close = () => emit('close')
 
-const submit = async () => {
-  showOverlay()
+const { data, isPristine, handleSubmit } = useForm<UpdatePlaylistData>({
+  initialValues: { ...pick(playlist, 'name', 'folder_id', 'description', 'cover'), folder_name: null },
+  onSubmit: async data => {
+    const formData = structuredClone(toRaw(data))
 
-  try {
-    await playlistStore.update(playlist, {
-      name: name.value,
-      folder_id: folderId.value
-    })
+    if (formData.cover === playlist.cover) {
+      delete formData.cover
+    }
 
+    await playlistStore.update(playlist, formData)
+  },
+  onSuccess: () => {
     toastSuccess('Playlist updated.')
     close()
-  } catch (error) {
-    showErrorDialog('Something went wrong. Please try again.', 'Error')
-    logger.error(error)
-  } finally {
-    hideOverlay()
-  }
-}
-
-const isPristine = () => playlist.name === name.value && playlist.folder_id === folderId.value
+  },
+})
 
 const maybeClose = async () => {
-  if (isPristine()) {
+  if (isPristine() || (await showConfirmDialog('Discard all changes?'))) {
     close()
-    return
   }
-
-  await showConfirmDialog('Discard all changes?') && close()
 }
 </script>
 
-<style lang="scss" scoped>
+<style lang="postcss" scoped>
 form {
-  width: 540px;
+  min-width: 100%;
 }
 
 label.folder {
-  flex: .6;
+  flex: 0.6;
 }
 </style>

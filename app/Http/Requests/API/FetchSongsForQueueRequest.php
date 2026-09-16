@@ -2,7 +2,7 @@
 
 namespace App\Http\Requests\API;
 
-use App\Repositories\SongRepository;
+use App\Builders\SongBuilder;
 use Illuminate\Validation\Rule;
 
 /**
@@ -12,15 +12,15 @@ use Illuminate\Validation\Rule;
  */
 class FetchSongsForQueueRequest extends Request
 {
-    /** @return array<mixed> */
+    /** @inheritdoc */
     public function rules(): array
     {
         return [
             'order' => ['required', Rule::in('asc', 'desc', 'rand')],
-            'limit' => 'required|integer|min:1',
+            'limit' => ['required', 'integer', 'min:1'],
             'sort' => [
                 'required_unless:order,rand',
-                Rule::in(array_keys(SongRepository::SORT_COLUMNS_NORMALIZE_MAP)),
+                Rule::in(array_keys(SongBuilder::SORT_COLUMNS_NORMALIZE_MAP)),
             ],
         ];
     }

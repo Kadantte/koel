@@ -2,28 +2,55 @@
 
 namespace Tests\Feature;
 
+use App\Http\Resources\AlbumResource;
+use App\Http\Resources\ArtistResource;
+use App\Http\Resources\PodcastResource;
+use App\Http\Resources\SongResource;
 use App\Models\Album;
 use App\Models\Artist;
+use App\Models\Podcast;
 use App\Models\Song;
+use PHPUnit\Framework\Attributes\Test;
+use Tests\TestCase;
+
+use function Tests\create_user;
 
 class ExcerptSearchTest extends TestCase
 {
-    public function testSearch(): void
+    public function setUp(): void
     {
-        Song::factory()->create(['title' => 'A Foo Song']);
-        Song::factory(6)->create();
+        parent::setUp();
 
-        Artist::factory()->create(['name' => 'Foo Fighters']);
-        Artist::factory(3)->create();
+        config()->set('scout.driver', 'collection');
+    }
 
-        Album::factory()->create(['name' => 'Foo Number Five']);
-        Album::factory(4)->create();
+    protected function tearDown(): void
+    {
+        config()->set('scout.driver', null);
 
-        $this->getAs('api/search?q=foo')
-            ->assertJsonStructure([
-                'songs' => ['*' => SongTest::JSON_STRUCTURE],
-                'artists' => ['*' => ArtistTest::JSON_STRUCTURE],
-                'albums' => ['*' => AlbumTest::JSON_STRUCTURE],
-            ]);
+        parent::tearDown();
+    }
+
+    #[Test]
+    public function search(): void
+    {
+        $user = create_user();
+        Song::factory()->for($user, 'owner')->createOne(['title' => 'Foo Song']);
+        Song::factory()->createOne();
+
+        Artist::factory()->for($user)->createOne(['name' => 'Foo Fighters']);
+        Artist::factory()->createOne();
+
+        Album::factory()->for($user)->createOne(['name' => 'Foo Number Five']);
+        Album::factory()->createOne();
+
+        Podcast::factory()->hasAttached($user, relationship: 'subscribers')->createOne(['title' => 'Foo Podcast']);
+
+        $this->getAs('api/search?q=foo', $user)->assertJsonStructure([
+            'songs' => [0 => SongResource::JSON_STRUCTURE],
+            'podcasts' => [0 => PodcastResource::JSON_STRUCTURE],
+            'artists' => [0 => ArtistResource::JSON_STRUCTURE],
+            'albums' => [0 => AlbumResource::JSON_STRUCTURE],
+        ]);
     }
 }

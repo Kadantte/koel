@@ -3,17 +3,17 @@
 namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
-use App\Http\Requests\API\PlaylistFolderPlaylistDestroyRequest;
-use App\Http\Requests\API\PlaylistFolderPlaylistStoreRequest;
+use App\Http\Requests\API\PlaylistFolder\PlaylistFolderPlaylistDestroyRequest;
+use App\Http\Requests\API\PlaylistFolder\PlaylistFolderPlaylistStoreRequest;
 use App\Models\PlaylistFolder;
-use App\Services\PlaylistFolderService;
+use App\Services\Playlist\PlaylistFolderService;
 use Illuminate\Support\Arr;
 
 class PlaylistFolderPlaylistController extends Controller
 {
-    public function __construct(private PlaylistFolderService $service)
-    {
-    }
+    public function __construct(
+        private readonly PlaylistFolderService $service,
+    ) {}
 
     public function store(PlaylistFolder $playlistFolder, PlaylistFolderPlaylistStoreRequest $request)
     {
@@ -28,7 +28,7 @@ class PlaylistFolderPlaylistController extends Controller
     {
         $this->authorize('own', $playlistFolder);
 
-        $this->service->movePlaylistsToRootLevel(Arr::wrap($request->playlists));
+        $this->service->movePlaylistsToRootLevel($playlistFolder, Arr::wrap($request->playlists));
 
         return response()->noContent();
     }
